@@ -1,0 +1,1798 @@
+---
+title: |
+  | The Seoul bike sharing service 
+  | Factor analysis and clustering
+author: "Hugo Cornet, Pierre-Emmanuel Diot, Guillaume Le Halper, Djawed Mancer"
+header-includes:
+  - \usepackage{float}
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 3
+    keep_tex: yes
+    df_print: kable
+    dev: png
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(dev='pdf',echo = FALSE, warning=FALSE, 
+                      comment=FALSE, message=FALSE, fig.align='center')
+```
+
+
+```{r setup2}
+library(readxl)
+library(FactoMineR)
+library(ggplot2)
+library(ggpubr)
+library(hrbrthemes)
+library(factoextra)
+library(tidyverse)
+library(dplyr)
+library(DT)
+library(knitr)
+library(kableExtra)
+library(gplots)
+library(ggcorrplot)
+library(corrplot)
+library(xtable)
+library(ggrepel)
+library(cluster)
+```
+
+
+```{r colors}
+choix_pal <- "Set2"
+col_plan <- "#008EA0FF" 
+col_var <- "#DE9696"
+col_ind <- "#B1A3C0"
+col_bar <- "#62D2CA"
+col_rows <- "#8CC8DD"
+col_cols <- "#F38E70"
+orange <- "#FF6F00FF"
+```
+
+
+```{r}
+# Thème utilisé pour les différents graphiques
+theme_set(theme_minimal())
+```
+
+
+\newpage
+
+# Introduction
+
+
+The first part of our analysis aimed to have a global view on the `SeoulBike` dataset. We used the tools of both descriptive and frequentist statistics in order to find the dataset's main patterns. You will find the main results of the descriptive statistics part in the appendix. 
+
+Now, let's dive into data so as to explain the links between the variables more precisely. This part of the analysis aims to explore the results found in the previous part. 
+
+The report will be divided into two main axes which are factor analysis and clustering. The former's goal is to reduce a large number of variables into fewer numbers of factors while extracting maximum common variance from these variables. Regarding the latter, it is used to group similar individuals into a limited number of classes which are created by different kind of algorithms. 
+
+
+## Code automation
+
+We have automated several functions with the view of simplifying the way our code is built. Among them you can find `mykable` for tables' layout, `ctr_viz` and `point_cloud` for visualizing the principal component analysis' results and `first_look` for the multiple correspondence analysis' visualization. 
+
+```{r}
+### Automatisation d'une fonction pour la mise en forme des tableaux ###
+
+if (knitr::is_latex_output()) {
+  mykable <- function(tab, transp = FALSE, digits =2, titre=NULL, font_size = NULL,...){
+      if( transp ){
+        if(ncol(tab)<=6){
+          tab %>% t() %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position"),
+                           font_size =  font_size)
+        } else {
+          tab %>% t() %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position","scale_down"),
+                           font_size =  font_size)
+        }
+        
+      } else {
+        if(ncol(tab)<=6){
+          tab %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position"),
+                           font_size =  font_size)
+        } else {
+          tab %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position","scale_down"),
+                           font_size =  font_size)
+        }
+      }
+    }
+  } else {
+  mykable <- function(tab, transp = FALSE, digits = 2, titre=NULL, font_size = NULL, ...){
+      if(transp){
+        tab %>% t() %>% kable(caption=titre, digits = digits,...) %>%
+          kable_styling(full_width = F, position = "center",
+                        bootstrap_options = c("striped", "condensed"))  
+      } else {
+        tab %>% kable(caption=titre, digits = digits, ...) %>%
+          kable_styling(full_width = F, position = "center",
+                        bootstrap_options = c("striped", "condensed"))
+      }
+    }
+  }
+```
+
+
+```{r first_look}
+# fonction, pour un premier regard, réalisant côte-à-côté le nuage des individus, le nuage des modalités
+first_look <- function(x, axes = c(1,2), end = 7){
+  var <- str_sub(rownames(x$var$coord), start = 1, end = end)
+  # if/else pour afficher le graph des variables seulement pour les axes 1 et 2
+  ggarrange(
+    fviz_mca_ind(x, geom="point",  col.ind=col_ind ,
+                 repel = TRUE, alpha = 0.6, axes = axes) +
+      theme(axis.text.x = element_text(size=6),
+            title = element_text(size=8)),
+    fviz_mca_var(x, geom=c("point", "text"),
+                 choice = "var.cat", axes = axes,
+                 invisible = "quali.sup", col.var = var, 
+                 repel = TRUE, labelsize = 3) +
+      theme(legend.position="None") +
+      theme(axis.text.x = element_text(size=6),
+            title = element_text(size=8)),
+    ncol = 2
+    )
+  }
+```
+
+```{r}
+# fonction facilitant la création de représentation du nuage des individus colorés par la modalité d'une variable
+habillage <- function(x, n, axes = c(1,2)){
+  fviz_mca_ind(x, geom="point", palette=choix_pal,
+               axes= axes,
+               habillage = n, alpha = 0.4
+               ) + 
+    ggtitle(" ")
+}
+```
+
+```{r}
+# fonction qui gère l'affichage des graphiques de contributions aux axes trouvés par l'analyse factorielle (ACP, AFC, ACM)
+ctr_viz <- function(obj, choice="var",smax=3,
+                    fill=col_var,col=col_var,
+                    ncol=3, nrow=2,top=10){
+  myplots <- list()
+  for (s in 1:smax){
+    plot <- eval(
+      substitute(
+        fviz_contrib(
+          obj, choice=choice, axes =s,
+          fill = fill, color = col, top=top) +
+          theme(axis.text.x = element_text(size=6),
+                title = element_text(size=8))
+        ,list(s=s)
+        )
+      )
+    myplots[[s]] <- plot
+  }
+  ggarrange(plotlist=myplots,ncol=ncol,nrow=nrow)
+}
+```
+
+
+```{r }
+### Function which determines the number of individuals needed 
+### to cumulate more than alpha % contribution to one principal component ###
+
+nb_ind_ctr <- function(obj, pc=pc, alpha=50){
+  # assigning 1 to iteration variable and 0 to contribution variable
+  k=1
+  ctr <- 0
+  # while contribution to pc is below alpha %
+  while (ctr < alpha) {
+    # add contribution of individual k
+    ctr <- ctr+obj$ind$contrib[k,pc]
+    k=k+1
+  }
+  # stop the while loop once alpha % contribution has been cumulated
+  return(k)
+}
+```
+
+```{r}
+### Applying nb_ind_ctr() to the first 5 PCs ###
+list_nb_ind_ctr <- function(obj, smax=3,names=c(NULL)){
+  output <- list(NULL)
+  for (s in 1:smax){
+    output <- append(output, nb_ind_ctr(obj, pc=s))
+  }
+  output <- output[-1] %>% unlist() %>% matrix(nrow=1, byrow=T)
+  colnames(output) <- names
+  rownames(output) <- "Number of individuals"
+  output <- output %>% as.data.frame()
+  return(output)
+}
+```
+
+```{r}
+# automatisation nuages variables et individus 
+
+point_cloud <- function(pca_obj, choice=choice,
+                        col="cos2",axes=c(1,2),smax=3,
+                        gradient_col=c("#00AFBB", "#E7B800", "#FC4E07"),
+                        ncol=3,nrow=1){
+  myplots <- list()
+  if (choice=='ind'){
+    for (i in 1:smax){
+      mysubplots <- list()
+      for (j in 1:smax){
+        if (i<j){
+          plot <- eval(
+            substitute(
+              fviz_pca_ind(respca,col.ind = col, geom="point",
+                           gradient.cols = gradient_col,
+                           repel = TRUE, axes=c(i,j)
+              ) +
+                theme(axis.text.x = element_text(size=6),
+                      title = element_text(size=8))
+              ,list(j=j)
+            )
+          )
+          mysubplots[[j]] <- plot
+        }
+      }
+      mysubplots <- mysubplots[!sapply(mysubplots,is.null)]
+      myplots[[i]] <- mysubplots
+    }
+  }
+  else{
+    for (i in 1:smax){
+      mysubplots <- list()
+      for (j in 1:smax){
+        if (i<j){
+          plot <- eval(
+            substitute(
+              fviz_pca_var(respca,col.var= col,
+                           gradient.cols = gradient_col,
+                           repel = TRUE, axes=c(i,j)
+              ) +
+                theme(axis.text.x = element_text(size=6),
+                      title = element_text(size=8))
+              ,list(j=j)
+            )
+          )
+          mysubplots[[j]] <- plot
+        }
+      }
+      mysubplots <- mysubplots[!sapply(mysubplots,is.null)]
+      myplots[[i]] <- mysubplots
+    }
+  }
+  myplots <- myplots[-smax] 
+  ggarrange(plotlist = unlist(myplots, recursive = FALSE), ncol=ncol, nrow=nrow)
+}
+
+```
+
+
+## Importing the dataset : 'SeoulBikeData.csv'
+
+```{r}
+SeoulBike <- read.csv(file='SeoulBikeData.csv', sep=',', header=TRUE)
+```
+
+```{r}
+SeoulBike <- SeoulBike[SeoulBike$Functioning.Day=='Yes',]
+# suppresion des jours non fonctionnels car pas de vélos loués
+```
+
+
+```{r}
+head(SeoulBike[,c(1:7)]) %>% mykable(
+  titre="Overview of the `SeoulBike` data frame")
+```
+
+## The dataset's variables
+
+
+The database is mostly made of quantitative variables which is good news for the principal component analysis. However we need qualitative variables to perform both the correspondence analysis and the multiple correspondence analysis. That's why a few qualitative variables will be created from the quantitative ones using the `class_cut` function, whose role is to cut quantitative variables into classes. 
+
+
+```{r}
+SeoulBike$Date <- as.Date(SeoulBike$Date, format = "%d/%m/%Y")
+```
+
+```{r}
+SeoulBike <- SeoulBike %>% mutate_each(
+  funs(factor),
+  c('Seasons','Holiday','Functioning.Day')
+  )
+```
+
+
+```{r}
+# Fonction pour affichage de la structure d'une base de données
+custom_glimpse <- function(df) {
+  data.frame(
+    col_name = colnames(df),
+    col_index = 1:ncol(df),
+    col_class = sapply(df, class),
+    row.names = NULL
+  )
+}
+```
+
+```{r}
+custom_glimpse(SeoulBike) %>% 
+  mykable(transp=F, titre="Structure of the `SeoulBike` data frame")
+```
+
+
+# Principal Component Analysis (PCA)
+
+Principal component analysis is a multivariate statistical technique that uses an orthogonal transformation to convert a set of correlated variables into a set of orthogonal, uncorrelated axes called principal components. The primary motivation behind PCA is to reduce a large number of variables into a smaller number of derived variables while preserving as much of the data's variation as possible.
+
+In this part we will carry out PCA in order to find principal axes which summarize the information  contained in the `SeoulBike` dataset. Bear in mind we want to determine the meteorological variables that best explain the number of rented bikes. We expect PCA to make groups out of these variables into few principal axes. 
+
+
+## First look at the quantitative variables
+
+### Standardized dataset
+
+First of all, PCA cannot be performed if the quantitative variables are not scaled. Scaling the variables means centering each variable then dividing each of them by their respective standard deviation. The standardized matrix is defined as follows:
+
+$$X_{st_{j}}=\frac{X_j-\mu_j}{\sigma_j}$$
+
+where $j$ is one variable of the dataset (e.g. $j$ can be `Rented.Bike.Count`).
+
+```{r}
+### Fonction qui centre et réduit une variable ###
+std <- function(x){
+  output <- (x-mean(x))/sd(x)
+}
+
+### Application de st() à toutes les variables quantitatives
+quantvar <- SeoulBike[,2:11]
+quantvar_std <- quantvar %>% mutate_all(std)
+```
+
+```{r}
+quantvar_std[,c(1:5)] %>% 
+  head() %>% 
+  mykable(titre="Overview of the standardized variables")
+```
+
+
+### Correlation matrix
+
+The correlation matrix can be obtained by using the dataset of standardized variables. Let's note $X_{st}$ the standardized matrix, $^{t}X_{st}$ its transpose and $n$ the standardized matrix's number of rows which is 8465.
+
+The correlation matrix $M_{corr}$ can be computed as follows:
+
+$$M_{corr}=\frac{1}{n}\ ^{t}X_{st}X_{st}$$
+The following graph illustrates $M_{corr}$. 
+
+```{r fig.width=15, fig.height=8}
+p <- ggcorrplot(cor(quantvar), hc.order = FALSE, type = "lower",
+           outline.col = "white",
+           colors = c("#6D9EC1", "white", "#E46726"),
+           lab = TRUE, show.diag=FALSE,
+           legend.title = "r-value") +
+  ggtitle("Correlation matrix") +
+  theme(plot.title = element_text(size = 15))
+
+ggarrange(p, ncol=1, nrow=1) + theme_bw()
+```
+
+## Performing PCA
+
+Once the variables scaled, we can perform PCA. Both the variables `Rented.Bike.Count` and `Hour` are supplementary variables and will help us interpreting the principal components. The only active variables are the meteorological ones.  
+
+```{r}
+pca_data <- SeoulBike[,c(2:12)]
+```
+
+```{r echo=TRUE}
+respca <- PCA(pca_data[,1:10], quanti.sup=1:2, graph=F,scale.unit=T)
+```
+
+### Eigenvalues
+
+```{r}
+get_eigenvalue(respca) %>% round(digits=2) %>% mykable(
+  titre="Eigenvalues and variance explained")
+```
+
+Each of the ten principal components explain a percentage of the total variation in the dataset. Put together PC$_1$, PC$_2$ and PC$_3$ explain 67.91% of the variance. One could add PC$_4$ in order to keep almost 80% information. However, the study of the eigenvalues - as stated by the Kaiser-Guttman rule - indicates that only three components can be kept. 
+$$\forall \ i \in \ [\![1;3]\!]\ ; \ \lambda_i \geq 1$$
+where $\lambda_i$ stands for the eigenvalue associated with the $i^{th}$ principal component.
+
+On the scree plot which represents the eigenvalues found above, the "elbow" is located at the third  principal component. This illustrates why only are kept the first three axes.
+
+```{r fig.height=3, fig.width=5}
+p <- fviz_screeplot(respca, addlabels = TRUE, ylim = c(0, 35),choice = "variance", ylab=" ",
+               barfill=col_bar, barcol="white"
+               ) +
+  ggtitle("Scree plot") + 
+  ylab("% of explained variances") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+ggarrange(p, ncol=1, nrow=1) + theme_bw()
+```
+
+## Variables' analysis 
+
+### Quality of representation
+
+
+The quality of representation of a variable $j$ on the $s$-axis is measured by the percentage of inertia of variable $j$ projected on the $s$-axis. One knows the closer to one is the value, the better the variable is represented.
+This numeric indicator can be added up for several axes and is most often calculated for a plan. 
+
+One notes the best represented variables in the first plan are: `Dew.point.temperature..C.`, `Temperature..C.`, and `Humidity...` In the mean time, there are some variables for which the $(F_1,F_2)$ plan is inappropriate: `Wind.speed..m.s.`, `Snowfall..cm.` and `Rainfall.mm.`, and which are better represented in the $(F_1,F_3)$ and $(F_2,F_3)$ plans.
+
+```{r}
+tab <- rbind(respca$var$cos2[,1]+respca$var$cos2[,2],
+  respca$var$cos2[,1]+respca$var$cos2[,3],
+  respca$var$cos2[,2]+respca$var$cos2[,3]) 
+
+rownames(tab) <- c("(F1,F2)","(F1,F3)","(F2,F3)")
+
+tab %>%
+  t() %>% 
+  mykable(titre="Quality of representation of the variables in 3 plans")
+```
+
+### Contributions
+
+The dotted lines represent the expected contribution of each variable if  contributions were uniform. From the graph, one notes an antagonism between $F_2$ and $F_3$. While $F_2$ is largely described by `Temperature..C.` and `Solar.Radiation..MJ.m2.`, $F_3$ seems to be associated with bad weather variables with high contributions of `Wind.speed..m.s.`, `Snowfall..cm.` and `Rainfall.mm.`. Graphically, the most contributing variables are close to the edge of the variables' circle plotted below.
+
+```{r fig.width=9, fig.height=4}
+p <- ctr_viz(respca,smax=3,ncol=3,nrow=1,top=8)
+annotate_figure(
+  p,
+  top=text_grob("Variables' contributions to the first three axes",
+                face = "bold", size = 10)
+               ) + theme_bw()
+```
+
+
+### Correlations
+
+
+```{r}
+eta <- (get_pca_var(respca)$cor) %>% as.data.frame() 
+# R affiche seulement les corrélations significativement non nulles 
+```
+
+```{r fig.width=13, fig.height=5}
+eta_12 <- ggplot(eta) + 
+  aes(x=Dim.1, y=Dim.2,label=rownames(eta)) + 
+  geom_point( col=col_var ) +
+  geom_hline(yintercept=0,linetype='dashed') +
+  geom_vline(xintercept=0,linetype='dashed') +
+  geom_text_repel( col = col_var) +
+  labs(title = "", x = "Dim1 (30.2%)", y = "Dim2 (24.5%)") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) 
+
+eta_13 <- ggplot(eta) + 
+  aes(x=Dim.1, y=Dim.3,label=rownames(eta)) + 
+  geom_point( col=col_var ) +
+  geom_hline(yintercept=0,linetype='dashed') +
+  geom_vline(xintercept=0,linetype='dashed') +
+  geom_text_repel( col = col_var) +
+  labs(title = "", x = "Dim1 (30.2%)", y = "Dim3 (13.2%)") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+eta_23 <- ggplot(eta) + 
+  aes(x=Dim.2, y=Dim.3,label=rownames(eta)) + 
+  geom_point( col=col_var ) +
+  geom_hline(yintercept=0,linetype='dashed') +
+  geom_vline(xintercept=0,linetype='dashed') +
+  geom_text_repel( col = col_var) +
+  labs(title = "", x = "Dim2 (24.5%)", y = "Dim3 (13.2%)") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+p <- ggarrange(eta_12,eta_13,eta_23,ncol=3)
+annotate_figure(
+  p,
+  top=text_grob("Correlations between variables and the first principal components",
+                size = 12)
+               ) + theme_bw()
+```
+
+
+### Graph of variables
+
+The supplementary variable `Rented.Bike.Count` is projected onto the second component. The latter information allows us pointing out variables pulling up `Rented.Bike.Count`  Indeed, `Temperature..C.` and `Solar.Radiation..MJ.m2.` are well-represented and thus have a positive impact on the number of rented bikes. On the other hand regarding the third component, are depicted the negative-impact meteorological variables such as `Rainfall.mm.`, `Snowfall..cm.` and `Wind.speed..m.s`. 
+
+```{r fig.width=17, fig.height=8}
+p <- point_cloud(respca,choice="var")
+annotate_figure(
+  p,
+  top=text_grob("Variables' point clouds in terms of quality of representation",
+                size = 14)
+               ) + theme_bw()
+```
+
+
+## Individuals' analysis
+
+### Quality of representation
+
+
+Quality of representation of an individual $i$ on the $s$ axis is measured by the part of inertia of $i$ projected on $s$.
+
+
+The following tables highlight the ten individuals who have the **best** quality of representation in each principal component. 
+
+```{r}
+sort_mat <- function(m, titre=NULL, decreasing=T){
+  m2 <- m %>% 
+    sort(decreasing = decreasing) %>%
+    round(2) %>%
+    as.list() %>% 
+    head(n=10)
+  tab <- m2 %>% 
+    as.data.frame() %>%
+    t() %>%
+    as.data.frame()
+  rownames(tab) <- names(m2)
+  colnames(tab) <- "cos2"
+  tab <- mykable(tab, titre=titre)
+  return(tab)
+}
+```
+
+
+```{r}
+df1 <- respca$ind$cos2[,1] %>% 
+  sort_mat(titre="Dim 1") 
+df2 <- respca$ind$cos2[,2] %>% 
+  sort_mat(titre="Dim 2")
+df3 <- respca$ind$cos2[,3] %>% 
+  sort_mat(titre="Dim 3") 
+```
+
+```{r eval=FALSE}
+df1 ; df2 ; df3
+```
+
+
+```{r results='asis'}
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.3\\linewidth}
+      \\centering",
+        df1,
+    "\\end{minipage}%
+    \\begin{minipage}{.3\\linewidth}
+      \\centering",
+          df2,
+    "\\end{minipage}%
+    \\begin{minipage}{.3\\linewidth}
+      \\centering",
+        df3,
+    "\\end{minipage}
+\\end{table}"
+)) 
+```
+
+The following tables highlight the ten individuals who have the **worst** quality of representation in each principal component.
+
+```{r}
+df1 <- respca$ind$cos2[,1] %>% 
+  sort_mat(titre="Dim 1", decreasing=FALSE) 
+df2 <- respca$ind$cos2[,2] %>% 
+  sort_mat(titre="Dim 2", decreasing=FALSE)
+df3 <- respca$ind$cos2[,3] %>% 
+  sort_mat(titre="Dim 3", decreasing=FALSE) 
+```
+
+```{r eval=FALSE}
+df1 ; df2 ; df3
+```
+
+
+```{r results='asis'}
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.3\\linewidth}
+      \\centering",
+        df1,
+    "\\end{minipage}%
+    \\begin{minipage}{.3\\linewidth}
+      \\centering",
+          df2,
+    "\\end{minipage}%
+    \\begin{minipage}{.3\\linewidth}
+      \\centering",
+        df3,
+    "\\end{minipage}
+\\end{table}"
+))  
+```
+
+It is difficult to draw conclusions from the previous tables as each table contain diverse individuals. 
+
+### Individuals' with the highest contributions 
+
+The contribution of an individual $i$ corresponds to the part of inertia he brings to the $s$-axis. 
+
+In these graphs, contributions may seem rather low, but this is due to the large amount of individuals. The red line depicts the uniform situation. We note the contributions to the third component are way higher than the contributions to the first two.
+
+```{r fig.width=9, fig.height=3}
+p <- ctr_viz(respca, smax=3,
+             choice="ind",
+             fill = col_ind, col = col_ind, 
+             top=10,nrow=1,ncol=3)
+
+annotate_figure(
+  p,
+  top=text_grob("Individuals'contributions to the first 3 PCs",
+                size = 11)
+               ) + theme_bw()
+```
+
+From the table below, we know the first dimension needs less individuals to gather half of the total contribution. Whereas the second, third and fourth dimensions need roughly half of the total amount of individuals to gather half of the total contribution. This makes sens because the first axes better explain the variability between individuals than higher axes. 
+
+```{r}
+list_nb_ind_ctr(
+  respca,
+  smax=5,
+  names=c("Dim1", "Dim2", "Dim3", "Dim4", "Dim5")
+) %>% 
+  mykable(titre="50 per cent contribution cumulated") 
+```
+
+
+### Graph of individuals 
+
+These representations not being fine-tuned, we cannot draw very precise conclusions except that well represented individuals are located far from the center of each point cloud. This makes sense because the better the representation of an individual is, the higher its coordinates on the projected axes are (in absolute value). Note that $cos^2$ stands for the quality of representation as the latter is defined as follows:
+$$qlt_s(i) = \frac{F_s(i)^2}{\sum_{i}F_s(i)^2}=cos^2(\theta^s_i)$$
+This formula is computed by using the Pythagorean theorem in the triangle defined by the vector between the origin of the plan $O$ and the projected point $i$ and the vector defining the $s$-axis. 
+
+```{r fig.width=15, fig.height=5}
+p <- point_cloud(respca,choice="ind",ncol=3,nrow=1)
+annotate_figure(
+  p,
+  top=text_grob("Individuals' point clouds in terms of quality of representation",
+                size = 14)
+               ) + theme_bw()
+```
+
+### Biplots
+
+```{r}
+### Function which automates biplot vizualization by group ###
+biplot_by_group <- function(x, group=NULL,palette=NULL,ellipses=TRUE,
+                            legend.title=NULL,graph_title=NULL,
+                            geom='point',cos2=.7){
+  fviz_pca_biplot(x,
+ geom.ind = geom, # show points only (but not text)
+ select.ind=list(cos2=cos2), # show points with a min qual or representation of 0.7
+ col.ind = group, # color by groups
+ col.var="#7C8281",
+ palette = palette,
+ addEllipses=ellipses, # Concentration ellipses
+ legend.title=legend.title
+ ) +
+  ggtitle(graph_title) + 
+  theme(plot.title = element_text(size = 12)) +
+  theme(axis.title.x = element_text(size = 10)) +
+  theme(axis.title.y = element_text(size = 10))
+}
+```
+
+Last but not least, we decide to represent season groups onto the biplot of variables and individuals so as to bring out how both the variables and the time observations are linked to the seasons. The first striking difference is the dichotomy between Winter and Summer seasons. When looking at the `Dew.point.temperature..C.` and `Temperature..C.` 's projections a discrimination is noticed between these two opposite seasons. In contrast, Spring and Autumn seasons are much more similar according to many projections. We recall considering these two seasons as "average" seasons. In addition, the Winter group does not follow the `Rented.Bike.Count` path as the Summer group does. 
+
+```{r fig.width=10, fig.height=5}
+ggarrange(
+  biplot_by_group(respca, 
+                group=pca_data$Seasons, 
+                palette="Pastel2",
+                legend.title="Seasons",graph_title='Biplot per season (PC1, PC2)') +
+    expand_limits(x=c(-6,6), y=c(-4,8)),
+  ncol=1,nrow=1
+  ) + theme_bw()
+```
+
+
+# Multiple correspondence analysis (MCA)
+
+Multiple correspondence analysis can be seen as a generalization of principal component analysis when the variables to be analyzed are categorical instead of quantitative. In the `SeoulBike` dataset the variables are mostly quantitative except `Seasons`, `Holiday` and `Functionning.Day`. The latter two being useless, we have to create qualitative variables from the quantitative ones in order to perform MCA. We use the `class_cut` function to do so.
+
+Keep in mind that we use this technique in order to summarize the core information that best explains the number of rented bikes in Seoul.  
+
+## Categorical variables
+
+```{r echo=TRUE}
+
+###Function which creates categorical variables from quantitative variables###
+
+break_fun <- function(x){
+  if (quantile(x,probs=seq(0,1,0.25))[1] > 0){
+    result <- c(0,quantile(x,probs=seq(0,1,0.25))[-1])
+    }
+  else{
+    result <- quantile(x,probs=seq(0,1,0.25))
+    }
+  return(result)
+}
+
+class_cut <- function(x, breaks=break_fun(x), labels=NULL){
+  output <- cut(x,breaks=breaks,labels=labels, include.lowest = TRUE)
+  return (output)
+}
+```
+
+
+```{r}
+# Rented Bike Count
+SeoulBike$RentedBike.cut <- class_cut(
+  SeoulBike$Rented.Bike.Count,
+  labels=c("Low Rental", "Med Rental","High Rental", "Very high Rental")
+  )
+
+# Temperatures
+SeoulBike$Temp.cut <- class_cut(
+  SeoulBike$Temperature..C.,
+  labels=c("Low Temp.", "Med Temp.", "High Temp.", "Very high Temp.")
+)
+
+
+# Solar Radiation
+SeoulBike$SolRad.cut <- class_cut(
+  SeoulBike$Solar.Radiation..MJ.m2.,
+  breaks=c(-1,1,2,max(SeoulBike$Solar.Radiation..MJ.m2.)),
+  labels=c("Low Sol.", "Med Sol.", "High Sol.")
+)
+
+# Hour
+SeoulBike$Hour.cut <- class_cut(
+  SeoulBike$Hour, 
+  breaks=c(-1,5,11,17,23), 
+  labels= c("Night","Morning","Afternoon","Evening")
+  )
+
+# Humidity
+SeoulBike$Hum.cut <- class_cut(
+  SeoulBike$Humidity..., 
+  labels= c("Low Hum", "Med Hum", "High Hum.", "Very high Hum.")
+  )
+
+# Wind Speed
+SeoulBike$WindSpeed.cut <- class_cut(
+  SeoulBike$Wind.speed..m.s., 
+  labels= c("Low speed", "Med speed", "High speed", "Very high speed")
+  )
+```
+
+
+```{r}
+mca_data <- SeoulBike[,c(12,15:17)]
+```
+
+
+Both the variables `RentedBike.cut` and `Temp.cut` are built on their parent quantitative variables' quartiles. The solar radiation level variable has been cut into three classses in order to create `SolRad.cut`.
+
+
+```{r}
+mca_data[seq(1,nrow(mca_data),1000),] %>%  
+  mykable(titre="Random observations of the variables used in the MCA")
+```
+
+
+## Links between qualitative variables : Cramér's Vs
+
+
+Cramér's V is a measure of dependency between two qualitative variables and it is based on Pearson's $\chi^2$ statistic. The higer the $\chi^2$ statistic, the more likely the variables depend on each other, so the higer Cramér's V. It is computed with the following formula:
+
+$$V={\sqrt {\frac {\chi ^{2}/n}{\min(k-1,r-1)}}}$$
+
+```{r vcramer}
+cv <- function(x, y) {
+      t <- table(x, y)
+      chi <- suppressWarnings(chisq.test(t))$statistic
+      cramer <- sqrt(chi / (length(x) * (min(dim(t)) - 1)))
+      cramer
+}
+
+cramer.matrix<-function(y, fill = TRUE){
+      col.y<-ncol(y)
+      V<-matrix(ncol=col.y,nrow=col.y)
+      for(i in 1:(col.y - 1)){
+            for(j in (i + 1):col.y){
+                  V[i,j]<-cv(pull(y,i),pull(y,j))
+            }
+      }
+      diag(V) <- 1 
+      if (fill) {
+            for (i in 1:ncol(V)) {
+                  V[, i] <- V[i, ]
+            }
+      }
+      colnames(V)<-names(y)
+      rownames(V)<-names(y)
+      V
+}
+```
+
+The correlation matrix based on the Cramér's Vs depicts different positive correlations between the variables. Put another way, each categorical variable has a positive influence on the number of rented bikes. 
+
+```{r fig.width=15, fig.height=7}
+p <- ggcorrplot(cramer.matrix(mca_data), hc.order = FALSE, type = "lower",
+           outline.col = "white",
+           colors = c("#6D9EC1", "white", "#E46726"),
+           lab = FALSE, show.diag=FALSE,
+           legend.title = "r-value") +
+  ggtitle("Correlation matrix between Cramer's Vs") +
+  theme(plot.title = element_text(size = 15))
+
+ggarrange(p, ncol=1, nrow=1) + theme_bw()
+```
+
+## Performing MCA
+
+The following code line carries out the multiple correspondence on the chosen variables.
+
+```{r echo=TRUE}
+res.mca <- MCA(mca_data, ncp=10, graph=F, level.ventil = 0.1)
+```
+
+We have decide to keep 10 dimensions in the result and we have chosen $1\%$ as frequency below which a rare modality is disaggregated, i.e. its individuals are distributed in the other modalities randomly.
+
+## Point clouds of individuals and variables' categories
+
+### First look at the MCA results
+
+It is important to remember that when we talk about individuals it refers to **time observations** as each row of the dataset is an hourly report from the Seoul bike sharing service. 
+
+#### Dimensions 1 and 2
+
+
+The individuals point cloud highlights several groups. If each group is considered one big point, we can vizualise a U-shaped curve by linking them. Comparing this plot to the variable categories' one, we see that each group of individuals can be practically associated to one season. 
+
+The variable categories' graph is also U-shaped as three out of four variables were formed from quantitative variables. It is called the Guttman effect and it is very obvious for the `Temp.cut` variable. It will be shown more precisely later. 
+
+The first axis ranks in ascending order the rental intensity, the temperatures' level and the solar radiation level, it is a **scale factor**. As for the second axis it is an **opposition factor** as it distinguishes moderate values such as `Med Temp` and `High Rental` from extreme values like `Very high Temp` and `Low Temp` (c.f. Guttman effect).
+
+
+```{r fig.width=9, fig.height=5}
+# plan(F1;F2)
+p <- first_look(res.mca)
+
+annotate_figure(
+  p,
+  top=text_grob("Vizualisation of dimensions 1 and 2",
+                size = 12)
+               ) + theme_bw()
+```
+
+#### Higher dimensions 
+
+
+Just like dimension 2, dimension 3 is an opposition factor for the `RentedBike.cut` variable. One can notice that axis 4 isolates the class `High Sol.` from `Low Sol.` and `Med Sol.`. It may be due to the fact that sunny days are not common place in Seoul. 
+
+The individuals' plot is hard to interpret as the point cloud is scattered. 
+
+```{r fig.width=9, fig.height=5}
+#(F3;F4)
+p <- first_look(res.mca,axes=c(3,4))
+
+annotate_figure(
+  p,
+  top=text_grob("Vizualisation of dimensions 3 and 4",
+                size = 12)
+               ) + theme_bw()
+```
+
+
+Two groups of individuals can be noticed on the following graph, even though the variable categories' graph being difficult to interpret as it is tightened close to the origin. The `Med Sol.` category is the only one located far from the grouping of categories. 
+
+```{r fig.width=9, fig.height=5}
+#(F5;F6)
+p <- first_look(res.mca,axes=c(5,6))
+
+annotate_figure(
+  p,
+  top=text_grob("Vizualisation of dimensions 5 and 6",
+                size = 12)
+               ) + theme_bw()
+```
+
+### Individuals' point clouds
+
+With the view of having a more fine-tuned representation of the point cloud, we can color each observation by category. It can be useful to identify several groups of time observations. 
+
+Top left there are time observations related to low temperatures, Winter season and a low rental level. Whereas both on the right and on the bottom right we can find time observations with high and very high rental levels, pretty high temperatures and mostly related to Spring and Autumn seasons.
+
+The top right points correspond to Summer season with very high temperatures, diverse solar radiation levels and a fluctuating rental intensity.
+
+In that respect, Autumn and Spring appear to be the seasons during which the more bikes are rented. Although the temperatures' level has a positive influence on the number of rented bikes, Summer season stands out as its rental intensity varies. 
+
+```{r fig.width=12, fig.height=8}
+p <- ggarrange(
+  habillage(res.mca, 1), habillage(res.mca, 2), habillage(res.mca, 3),
+  habillage(res.mca, 4),
+  ncol=2, nrow=2
+)
+annotate_figure(
+  p,
+  top=text_grob("Individuals' point clouds colored by category",
+                size = 14)
+               ) + theme_bw()
+```
+
+## The MCA's main features
+
+### Eigenvalues and variance explained
+
+Unlike principal components analysis, MCA usually result in little variability retained by the axis which means that keeping only two or three axis is not enough to summarize most of the information. Here we cumulate almost $50\%$ variance explained just by keeping the three first axes which is quite a good result. It may be due to the fact that we performed MCA on only four variables. 
+
+```{r}
+get_eigenvalue(res.mca) %>% round(digits=2) %>% mykable(
+  titre="Eigenvalues and variance explained")
+```
+
+### Contributions
+
+The contribution of one category $k$ (respectively one individual $i$) to one axis $s$ matches to the proportion of inertia brought by $k$ (respectively $i$) to $s$.  
+
+```{r fig.width=9, fig.height=6}
+p <- ctr_viz(res.mca,smax=6)
+annotate_figure(
+  p,
+  top=text_grob("Categories' contributions to the first 6 axes",
+                size = 12)
+               ) + theme_bw()
+```
+
+The `list_nb_ind_ctr` function we have created before allows us to determine how many observations we need in order to cumulate at least 50 per cent contribution to one axis $s$. For instance, about one quarter of the dataset's observations are needed to maintain a proportion of inertia of more than 50 percent in dimension one. This number increases for higher dimensions. 
+
+```{r}
+list_nb_ind_ctr(obj=res.mca,smax=6,
+                names=c("Dim1","Dim2","Dim3","Dim4","Dim5","Dim6")) %>% 
+  mykable(titre="50 per cent contribution cumulated") 
+```
+
+### Correlations between the variables and the principal axes
+
+
+The first axis is strongly correlated to `Temp.cut`, `RentedBike.cut` and `Season` which makes sense because we found a scale factor on both `Temp.cut` and `RentedBike.cut`. Most of the squared correlation ratios are way higher for dimensions one and two than for the other ones, apart from `SolRad.cut` which is $50\%$ correlated to axis 6. This could explain why the `Med Sol` category is located far from the other categories in the $(F_5;F_6)$ plan. 
+
+
+```{r}
+eta <- (get_mca_var(res.mca, element="mca.cor")$coord) %>% as.data.frame() 
+eta$col <- c(col_ind,rep(col_var, 3))
+eta <- eta[,c(1:6,11)]
+names(eta) <- c("dim1", "dim2", "dim3", "dim4", "dim5","dim6","col")
+```
+
+```{r fig.width=13, fig.height=5}
+eta_12 <- ggplot(eta) + aes(x = dim1, y = dim2, label = rownames(eta), col = as.factor(col)) + 
+  geom_point(show.legend = FALSE) + 
+  geom_hline(yintercept=0,linetype='dashed') +
+  geom_vline(xintercept=0,linetype='dashed') +
+  geom_text_repel( ) + 
+  scale_color_manual(values=c(col_ind, col_var)) +
+  labs(title = "", x = "Dim1 (23.27%)", y = "Dim2 (14.91%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.position = "none") 
+
+eta_34 <- ggplot(eta) + aes(x = dim3, y = dim4, label = rownames(eta), col = as.factor(col)) + 
+  geom_point(show.legend = FALSE) + 
+  geom_hline(yintercept=0,linetype='dashed') +
+  geom_vline(xintercept=0,linetype='dashed') +
+  geom_text_repel( ) + 
+  scale_color_manual(values=c(col_ind, col_var)) +
+  scale_x_continuous(limits=c(0,.8)) +
+  scale_y_continuous(limits=c(0,.8)) +
+  labs(title = "", x = "Dim3 (13.24%)", y = "Dim4 (12.57%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.position = "none") 
+
+eta_56 <- ggplot(eta) + aes(x = dim5, y = dim6, label = rownames(eta), col = as.factor(col)) + 
+  geom_point(show.legend = FALSE) + 
+  geom_hline(yintercept=0,linetype='dashed') +
+  geom_vline(xintercept=0,linetype='dashed') +
+  geom_text_repel( ) + 
+  scale_color_manual(values=c(col_ind, col_var)) +
+  scale_x_continuous(limits=c(0,.8)) +
+  scale_y_continuous(limits=c(0,.8)) +
+  labs(title = "", x = "Dim5 (12.36%)", y = "Dim6 (10.85%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.position = "none")
+
+p <- ggarrange(eta_12, eta_34, eta_56, ncol=3, nrow=1)
+annotate_figure(
+  p,
+  top=text_grob("Squared correlation ratios between the variables and the first 6 axes",
+                size = 14)
+               ) + theme_bw()
+```
+
+
+## Biplot of individuals and variables
+
+
+This graph is relevant for two main reasons. On the one hand it links the groups of individuals and the associated categories. Top left we can identify the winter group with low temperatures and a low level of bikes rental, whereas top right we have the summer group. The `Very High Rental` category seems to be at equal distance from both the Summer and the Autumn groups. The Spring group appears to be the middle class. On the other hand the graph perfectly illustrates what Guttman effect is with this well defines U-shaped curve linking the `Temp.cut` variable's categories. 
+
+
+```{r fig.height=3.5, fig.width=7}
+df <- get_mca_var(res.mca)$coord %>% as.data.frame()
+selection <- df[c("Low Temp", "Med Temp", "High Temp", "Very high Temp"),1:2]
+
+points <- data.frame(x=selection[1:nrow(selection)-1,1],
+                   y=selection[1:nrow(selection)-1,2],
+                   xend=selection[2:nrow(selection),1],
+                   yend=selection[2:nrow(selection),2]
+                   )
+
+p <- fviz_mca_biplot(
+  res.mca, label = "var", invisible = "quali.sup",
+                       col.ind=col_ind ,col.var=col_var,
+                       repel = TRUE
+  ) +
+  labs(subtitle='Guttman effect') +
+  geom_segment(aes(x=x,y=y,xend=xend,yend=yend),
+               data=points, alpha=.5, col=orange) +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 9)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+ggarrange(p,ncol=1,nrow=1) + theme_bw()
+```
+
+
+
+# Correspondence analysis (CA)
+
+Correspondence analysis is a multivariate statistical technique similar to PCA. The key difference is that it is not applied on quantitative variables but on categorical ones. CA is used as means of comparing two qualitative variables. It also provides a summary of data. Correspondence analysis  uses the $\chi^2$ statistic. Correspondence analysis is performed on a contingency table $C$ of size $n×m$ where $n$ is the number of rows and $m$ is the number of columns.
+
+We use this technique in our analysis in order to fine tune the links between the variables taken in pairs and to clarify the results found with multiple correspondence analysis.
+
+
+## Contingency tables
+
+
+The contingency tables give us a first look at the way the different classes are distributed. By looking at the observed frequencies we see that both the temperatures and the times of day seem to influence the number of rented bikes. However the link between rented bikes and humidity level is less striking as the observed frequencies are more evenly distributed.
+
+```{r}
+CAdf1 <- SeoulBike[,15:16] 
+CAdf1 <- table(CAdf1[,1], CAdf1[,2]) %>%
+  matrix(ncol=4) %>%
+  as.data.frame()
+colnames(CAdf1) <- levels(SeoulBike$Temp.cut)
+rownames(CAdf1) <- levels(SeoulBike$RentedBike.cut)
+CAdf1 %>% 
+  mykable(titre="Rented bikes and temperatures")
+```
+
+```{r}
+CAdf2 <- SeoulBike[,c(15,18)] 
+CAdf2 <- table(CAdf2[,1], CAdf2[,2]) %>%
+  matrix(ncol=4) %>%
+  as.data.frame()
+colnames(CAdf2) <- levels(SeoulBike$Hour.cut)
+rownames(CAdf2) <- levels(SeoulBike$RentedBike.cut)
+CAdf2 %>% 
+  mykable(titre="Rented bikes and time of day")
+```
+
+```{r}
+CAdf3 <- SeoulBike[,c(15,19)] 
+CAdf3 <- table(CAdf3[,1], CAdf3[,2]) %>%
+  matrix(ncol=4) %>%
+  as.data.frame()
+colnames(CAdf3) <- levels(SeoulBike$Hum.cut)
+rownames(CAdf3) <- levels(SeoulBike$RentedBike.cut)
+CAdf3 %>% 
+  mykable(titre="Rented bikes and humidity")
+```
+
+
+Here is another way, may be more telling, to vizualize relationships between the categorical variables. One notices as temperatures increase, there are more and more rented bikes. As regards time of day, the evening clearly stands out with a great amount of rented bikes. Eventually, the less striking effect is the humidity one. It is easy to see people do not rent that many bikes when it is really humid. Aside from that, `Low Hum` and `Med Hum` categories are kind of equivalent in terms of rented bikes, with a slight advantage for the `Med Hum` category.
+
+```{r fig.height=8, fig.width=15}
+p <- ggarrange(
+  ggballoonplot(CAdf1, size = "value", fill="#39D2A7") +
+    ggtitle("Rented bikes and temperatures") +
+    theme(plot.title = element_text(size = 12, face = "bold")) +
+    theme(legend.title = element_text(size = 10)),
+  ggballoonplot(CAdf2, size = "value", fill="#BAD8E9") +
+    ggtitle("Rented bikes and time of day") +
+    theme(plot.title = element_text(size = 12, face = "bold")) +
+    theme(legend.title = element_text(size = 10)),
+  ggballoonplot(CAdf3, size = "value", fill="#F79F85") +
+    ggtitle("Rented bikes and humidity") +
+    theme(plot.title = element_text(size = 12, face = "bold")) +
+    theme(legend.title = element_text(size = 10))
+)
+
+annotate_figure(
+  p,
+  top=text_grob("Contingency tables' vizualisation",
+                size = 14)
+               ) + theme_bw()
+```
+
+
+## Independency tests
+
+
+With the view of testing the likely independency between `RentedBike.cut` and the three other categorical variables, we use the Pearson $\chi^2$ test. First let's check whether the test's validity conditions are met:
+
+- $N$ the total number of frequencies is greater than 50
+- Each theoritical frequency is not less than 5
+
+So the $\chi^2$ statistic can be computed for the three tests. 
+
+```{r}
+test1 <- chisq.test(CAdf1)
+test2 <- chisq.test(CAdf2)
+test3 <- chisq.test(CAdf3)
+```
+
+
+For each test, the null hypothesis that there are no difference between the variables' classes is rejected. The very low p-values and the high values of the $\chi^2$ statistic indicate that the observed frequencies are unlikely to be observed in case of the null hypothesis would be true. So there are significant links between the variables taken in pairs.
+
+
+```{r}
+tabresult <- as.table(matrix(c(test1$statistic,test1$p.value,test1$parameter, 
+                               test2$statistic,test2$p.value,test2$parameter, 
+                               test3$statistic,test3$p.value,test3$parameter),
+                             nrow=3,byrow=T))
+colnames(tabresult) <- c("Statistic","p.value","df")
+rownames(tabresult) <- c("Temp.", "Time of day","Humidity")
+tabresult %>% mykable(titre="$\\chi^2$ tests on rented bikes")
+```
+
+```{r eval=FALSE}
+test1$expected
+test2$expected
+test3$expected
+```
+
+
+```{r eval=FALSE}
+rownames(test1$residuals)<-rownames(CAdf1)
+test1$residuals^2 %>% 
+  addmargins() %>% 
+  mykable(titre="Contributions to the $\\chi^2$ statistic")
+
+rownames(test2$residuals)<-rownames(CAdf2)
+test2$residuals^2 %>% 
+  addmargins() %>% 
+  mykable(titre="Contributions to the $\\chi^2$ statistic")
+
+rownames(test3$residuals)<-rownames(CAdf3)
+test3$residuals^2 %>% 
+  addmargins() %>% 
+  mykable(titre="Contributions to the $\\chi^2$ statistic")
+```
+
+The following barplots help us vizualise the links between the variables more easily. The temperatures' barplot displays a staircase shape with the number of rented bikes evolving proportionnally to the temperatures level. In addition, one notices a growing and  positively-correlated relationship: the lower the temperatures, the lower the number of rented bikes. Then, as temperature increases, the `Low Rental` proportion decreases, whilst the `High Rental` and `Very high Rental` categories greatly enhance.
+The  barplot on time of day  is quite similar to the previous one and also displays a staircase shape, with `Evening` endorsing the number one spot in terms of rented bikes. In the mean time, the `Night` category is not really linked to high levels of rental. As day goes along, a growth when it comes to rented bikes is noticed.
+Lastly, the humidity barplot is maybe the most uniform one which mitigates the relationship between this variable and the rented bike count.
+
+```{r}
+CAdf1 <- SeoulBike[,15:16] 
+CAdf1 <- table(CAdf1[,1], CAdf1[,2])
+
+col_prf1 <- CAdf1 %>%
+  prop.table(margin=2) %>%
+  as.data.frame()
+colnames(col_prf1) <- c("RentedBike.cut", "Temp.cut", "Freq")
+
+CAdf2 <- SeoulBike[,c(15,18)] 
+CAdf2 <- table(CAdf2[,1], CAdf2[,2])
+
+col_prf2 <- CAdf2 %>%
+  prop.table(margin=2) %>%
+  as.data.frame()
+colnames(col_prf2) <- c("RentedBike.cut", "Hour.cut", "Freq")
+
+CAdf3 <- SeoulBike[,c(15,19)] 
+CAdf3 <- table(CAdf3[,1], CAdf3[,2])
+
+col_prf3 <- CAdf3 %>%
+  prop.table(margin=2) %>%
+  as.data.frame()
+colnames(col_prf3) <- c("RentedBike.cut", "Hum.cut", "Freq")
+```
+
+```{r fig.height=7, fig.width=12}
+p1 <- col_prf1 %>%
+  ggplot(aes(x=Temp.cut,y=Freq,fill=RentedBike.cut)) + 
+    geom_bar(position="stack",stat="identity") +
+    ggtitle(" ") +
+    ylab("Frequency") +
+    xlab(" ") +
+    theme(plot.title = element_text(size = 10)) +
+    theme(legend.title = element_text(size = 10)) +
+    theme(axis.title.x = element_text(size = 10)) +
+    theme(axis.title.y = element_text(size = 10))
+
+p2 <- col_prf2 %>%
+  ggplot(aes(x=Hour.cut,y=Freq,fill=RentedBike.cut)) + 
+    geom_bar(position="stack",stat="identity") +
+    ggtitle(" ") +
+    ylab("Frequency") +
+    xlab(" ") +
+    theme(plot.title = element_text(size = 10)) +
+    theme(legend.title = element_text(size = 10)) +
+    theme(axis.title.x = element_text(size = 10)) +
+    theme(axis.title.y = element_text(size = 10))
+
+p3 <- col_prf3 %>%
+  ggplot(aes(x=Hum.cut,y=Freq,fill=RentedBike.cut)) + 
+    geom_bar(position="stack",stat="identity") +
+    ggtitle(" ") +
+    ylab("Frequency") +
+    xlab(" ") +
+    theme(plot.title = element_text(size = 10)) +
+    theme(legend.title = element_text(size = 10)) +
+    theme(axis.title.x = element_text(size = 10)) +
+    theme(axis.title.y = element_text(size = 10))
+
+ggarrange(p1,p2,p3,ncol=2,nrow=2) %>%
+  annotate_figure(
+  top=text_grob("Column profiles' vizualisation",
+                size = 13)
+               ) + theme_bw()
+```
+
+## Performing CA
+
+
+Since the $\chi^2$ test indicates no independency between the `RentedBike.cut` variable and the other ones, correspondence analysis can be carried out. 
+
+```{r echo=TRUE}
+resca1 <- CA(CAdf1,graph=F) # RentedBike.cut and Temp.cut
+resca2 <- CA(CAdf2,graph=F) # RentedBike.cut and Hour.cut
+resca3 <- CA(CAdf3,graph=F) # RentedBike.cut and Hum.cut
+```
+
+### Eigenvalues
+
+Here are displayed the three eigenvalues, per cent variances and per cent cumulative variances tables. For the `Temp.cut` variable, there is a huge amount - more than $90\%$ - of information saved by the first axis. In other words, the first principal compenent tends to explain almost the entire link between `RentedBike.cut` and `Temp.cut`. The second and third axes gather the residual information.
+As far as `Hour.cut` is concerned, the first axis explains somewhat less information than for `Temp.cut`. We thus have more residual information even if more than $80\%$ variance is explained on axis one. Regarding `Hum.cut`, the first axis almost explains the entirety of information, with only $5\%$ noise on the upper dimensions. 
+
+```{r}
+rbind(get_eigenvalue(resca1),
+      get_eigenvalue(resca2),
+      get_eigenvalue(resca3)) %>% 
+  t() %>% 
+  round(2) %>%
+  format(scientific=F) %>%
+  mykable(titre="Eigenvalues - Rented bikes and temperatures, time of day and humidity") %>%
+  add_header_above(c(" "=1,"Temp.cut"=3,"Hour.cut"=3,"Hum.cut"=3))
+```
+
+### Biplots 
+
+We distinguish both U-shaped and inverted U-shaped curves. The first two graphs are quite similar as the first axis discriminates between temperature levels (respectively time of day) and rental levels whereas the second axis contrasts extreme and average values. We see that each `Rentedbike.cut` category is associated with a level of temperature (graph 1) and a time of day (graph 2): it is the Guttman effet. It is really obvious for the `Low Rental` and `Very high Rental` classes.
+As for the inverted U-shaped curve graph, it depicts that a very high humidity level causes a low rental level whilst a medium humidity level seems to be the perfect condition for having high and very high levels of rental. The relationship is less strong though.
+
+```{r}
+###Fonction qui automatise la construction d'un data frame utilisé pour relier le modalités issues de variables quantitatives (AFC)###
+
+segment_ca <- function(ca_obj,seg="row",axis_x=1,axis_y=2){
+  points_col <- data.frame(x=ca_obj$col$coord[1:nrow(ca_obj$col$coord)-1,axis_x],
+                   y=ca_obj$col$coord[1:nrow(ca_obj$col$coord)-1,axis_y],
+                   xend=ca_obj$col$coord[2:nrow(ca_obj$col$coord),axis_x],
+                   yend=ca_obj$col$coord[2:nrow(ca_obj$col$coord),axis_y]
+                   )
+  points_row <- data.frame(x=ca_obj$row$coord[1:nrow(ca_obj$row$coord)-1,axis_x],
+                   y=ca_obj$row$coord[1:nrow(ca_obj$row$coord)-1,axis_y],
+                   xend=ca_obj$row$coord[2:nrow(ca_obj$row$coord),axis_x],
+                   yend=ca_obj$row$coord[2:nrow(ca_obj$row$coord),axis_y]
+                   )
+  if (seg=="row"){
+    return(points_row)
+  }
+  else{
+    return(points_col)
+  }
+}
+```
+
+```{r fig.width=13, fig.height=9}
+p1 <- fviz_ca_biplot(resca1,col.row = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE) + 
+  geom_segment(aes(x=x,y=y,xend=xend,yend=yend),
+               data=segment_ca(resca1,"row"), alpha=.5, col=col_rows) +
+  geom_segment(aes(x=x,y=y,xend=xend,yend=yend),
+               data=segment_ca(resca1,"col"), alpha=.5, col=col_cols) +
+  ggtitle("With temperatures and number of rented bikes")  +
+  labs(subtitle="Guttman effect") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 9)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+p2 <- fviz_ca_biplot(resca2,col.row = "contrib", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE) + 
+  geom_segment(aes(x=x,y=y,xend=xend,yend=yend),
+               data=segment_ca(resca2,"row"), alpha=.5, col=col_rows) +
+  ggtitle("With time of day")  +
+  labs(subtitle="Guttman effect") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 9)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+p3 <- fviz_ca_biplot(resca3,col.row = "contrib", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE) + 
+  geom_segment(aes(x=x,y=y,xend=xend,yend=yend),
+               data=segment_ca(resca3,"row"), alpha=.5, col=col_rows) +
+  ggtitle("With humidity")  +
+  labs(subtitle="Guttman effect") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(plot.subtitle = element_text(size = 9)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8))
+
+annotate_figure(ggarrange(p1,p2,p3,ncol=2,nrow=2), 
+                top=text_grob(
+                  "Correspondence analysis of the rented bike count", 
+                  size = 13)) + theme_bw()
+
+```
+
+### Contributions
+
+The following graphs give sense to the previous biplots as the categories which contribute the most to the first two principal components are plotted for each CA. 
+
+For the CA on rented bikes and temperatures, extreme categories are above the red line which depicts the uniform situation. One knows that the rows and columns which contribute more than others are the most important when it comes to variability kept by the principal components.
+
+```{r  fig.width=12, fig.height=5}
+p <- ggarrange(
+  ctr_viz(resca1,choice="row",smax=1,col=col_rows,fill=col_rows,ncol=1,nrow=1),
+  ctr_viz(resca1,choice="col",smax=1,col=col_cols,fill=col_cols,ncol=1,nrow=1)
+)
+annotate_figure(p, 
+                top=text_grob(
+                  "Contributions to the first PC - Rented bikes and temperatures", 
+                  size = 13)) + theme_bw()
+```
+
+As regards time of day, one notices the huge contribution of the `Night` category to the first dimension. This category attracts towards itself the `Low Rental` category as shown by the second biplot. Here both dimensions one and two are plotted because the second axis still keeps $16.5\%$ variance. 
+
+```{r  fig.width=12, fig.height=7}
+p <- ggarrange(
+  ctr_viz(resca2,choice="row",smax=2,col=col_rows,fill=col_rows,ncol=2,nrow=1),
+  ctr_viz(resca2,choice="col",smax=2,col=col_cols,fill=col_cols,ncol=2,nrow=1),
+  nrow=2
+)
+annotate_figure(p, 
+                top=text_grob(
+                  "Contributions to the two first PC - Rented bikes and time of day", 
+                  size = 13)) + theme_bw()
+```
+
+These last graphs of contributions demonstrate our previous assumptions: a very high humidity level has a negative impact on the bike rental level. The `Very high Hum` category attracts towards itself the `Low Rental` one. What's more the first axis sorts the rental intensity in decreasing order which means it is a scale factor.
+
+
+```{r  fig.width=12, fig.height=5}
+p <- ggarrange(
+  ctr_viz(resca3,choice="row",smax=1,col=col_rows,fill=col_rows,ncol=1,nrow=1),
+  ctr_viz(resca3,choice="col",smax=1,col=col_cols,fill=col_cols,ncol=1,nrow=1)
+)
+annotate_figure(p, 
+                top=text_grob(
+                  "Contributions to the first PC - Rented bikes and humidity", 
+                  size = 13)) + theme_bw()
+```
+
+
+# Clustering using the MCA's results
+
+
+Starting from the results of the multiple correspondence analysis, we aim to group individuals into several subsets. We have been able to make associations between different time observations thanks to the MCA. That's why we chose to perform clustering on the individuals' coordinates found with MCA rather than those found with PCA. Now we will clearly identify these associations by using hierarchical clustering. 
+
+First and foremost the technique used in this part is led by `R` algorithms. Thus the clusters we get will be discovered, not computed by us.
+
+```{r}
+eigval_cum <- get_eigenvalue(res.mca)[,3] %>% as.data.frame() %>% t()
+rownames(eigval_cum) <- "Inertia (%)"
+eigval_cum %>% mykable(titre="Cumulative inertia - MCA")
+```
+
+The previous table indicates that eight principal axes can be kept in order to preserve more than 90 $\%$ cumulative inertia. The 10 $\%$ left can be considered noise on the higher dimensions. That's why the `clust_data` data frame has been created.
+
+```{r echo=TRUE}
+clust_data <- res.mca$ind$coord[,1:8] %>% as.data.frame()
+```
+
+
+## The optimal number of clusters
+
+We use two methods to determine the number of clusters $k$. The first one amounts to find the optimal $k$ such as the total within sum of square, i.e. the variation into one cluster, be low enough without $k$ being too high. It is called the "elbow" method because the curve is elbow-shaped where the optimal number of clusters is located. The second one named the "silhouette" method is a measure of how similar an object is to its own cluster compared to other clusters. The silhouette ranges from $−1$ to $1$, where a high value indicates that the object is well matched to its own cluster and poorly matched to neighboring clusters. The average silhouette of one data point $i$ is defined as follows:
+
+$$s_i = \frac{b_i-a_i}{max\{a_i ;b_i\}}$$
+
+where $a_i$ stands for the average distance between point $i$ and the other points of the same cluster and $b_i$ being the average distance between point $i$ and the nearest cluster's points.
+
+
+```{r fig.width=9, fig.height=5, cache=TRUE}
+p <- ggarrange(
+  fviz_nbclust(clust_data, hcut, method = "wss") +
+    ggtitle("Elbow method") +
+    theme(plot.title = element_text(size = 10),
+          plot.subtitle = element_text(size = 9),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8)),
+  fviz_nbclust(clust_data, hcut, method = "silhouette") +
+    ggtitle("Silhouette method") +
+    theme(plot.title = element_text(size = 10),
+          plot.subtitle = element_text(size = 9),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8))
+  ) 
+
+annotate_figure(p, 
+                top=text_grob("Optimal number of clusters", 
+                  size = 12)) + theme_bw()
+```
+
+On the "elbow" method no elbow stands out but there are two points where the curve breaks which are $k=3$ and $k=7$. On the other hand the "silhouette" depicts an optimal number of ten clusters. 
+
+## Hierarchical clustering
+
+### Without consolidation
+
+We will fondly perform a hierarchical clustering without consolidation indicating to the algorithm that we want ten clusters. 
+
+```{r echo=TRUE}
+hc1 <- HCPC(res.mca, consol = FALSE, nb.clust = 10, graph = FALSE)
+```
+
+Let's recall we want to have clusters with similar individuals inside, but an important variability between clusters. It amounts to minimize within inertia while maximizing between inertia. 
+
+```{r fig.width=9, fig.height=5}
+p <- ggarrange(
+  hc1$call$t$within[1:20] %>% 
+    as.data.frame() %>%
+    ggplot() +
+      aes(x= 1:20,y=`.`) + 
+      geom_bar(stat = "identity", fill = col_ind, alpha= 0.8) +
+      labs(title = "Within inertia", x = "k") +
+      theme(plot.title = element_text(size = 10),
+          axis.title.x = element_text(size = 10),
+          axis.title.y = element_text(size = 8)),
+  hc1$call$t$inert.gain[1:20] %>% 
+    as.data.frame() %>%
+    ggplot() + 
+      aes(x= 1:20,y=`.`) + 
+      geom_bar(stat = "identity", fill = col_ind, alpha = 0.8) +
+      labs(title = "Gain in between inertia", x="k") +
+      theme(plot.title = element_text(size = 10),
+          axis.title.x = element_text(size = 10),
+          axis.title.y = element_text(size = 8))
+  )
+annotate_figure(p, 
+                top=text_grob("Without consolidation by partitioning", 
+                  size = 11)) + theme_bw()
+
+```
+
+On the first plot, we see that the decrease in the within inertia is noticeable until $k=5$. Then, the marginal decrease is almost constant. On the second plot, the gain in between inertia is quite high until $k=5$, then there is a break. 
+
+After having done a clustering with $k=5$, `R` indicated that the natural and optimal number of clusters was three. 
+
+
+As we have a large number of individuals, we ask `R` to perform a Kmeans preprocessing (with 50 clusters) before the hierarchical clustering in order for the dendrogram to be displayed. This preprocessing by partioning is very useful if the number of individuals is high. Note that consolidation cannot be performed if `kk` is different from Inf and some graphs are not drawn. So, the dendrogram's graph is related to a non-consolidated hierarchical clustering. 
+
+```{r echo=TRUE}
+hc2 <- HCPC(res.mca, kk=50,consol = FALSE, nb.clust = 3, graph = FALSE)
+```
+
+### With consolidation
+
+Once the dendrogram can be plotted, we decide to carry out a hierarchical agglomerative (HAC) clustering with consolidation by partioning. This time we do not ask for a Kmeans preprocessing because it would prevent us for having an appropriate clusters' vizualisation and the consolidation could not be performed. 
+
+
+```{r echo=TRUE}
+hc_conso <- HCPC(res.mca, nb.clust=3, consol = TRUE,  graph = FALSE)
+```
+
+The consolidation has been effective as it led to a 15 $\%$ increase in between inertia, which means more variability between clusters. 
+
+```{r}
+bw_in <- c(hc_conso$call$bw.before.consol,hc_conso$call$bw.after.consol)
+bw_in <- matrix(bw_in, ncol=2)
+colnames(bw_in) <- c("Before consolidation", "After consolidation")
+rownames(bw_in) <- "Between inertia"
+bw_in %>% as.data.frame() %>% mykable(digits=4, titre="Gain in between inertia")
+```
+
+The hierarchical clustering has been efficient to the extent that we can vizualise three distinct groups of observations. The larger points of each cluster represent their respective centers, i.e. the individuals who are most representative of each group. The red and the blue groups are both made of more individuals than the green one as shown by the two graphs. The figures written below the dendrogram are related to the 50 groups obtained by the K-means preprocessing. Each of theses groups contain a large number of individuals. As for the clusters' vizualisation, it is not directly linked to the dendrogramn as it has not been obtained after a K-means preprocessing on the HAC. So the dendrogramn gives rather an idea of how the groups of individuals are distributed in each cluster than the exact individuals' distribution.
+
+
+```{r fig.width=9, fig.height=5}
+p <- ggarrange(
+  fviz_dend(hc2, palette=choix_pal, cex = 0.5, k = 3, 
+            color_labels_by_k = TRUE,
+            main = "Dendrogram (with k-means preprocessing)", subtitle = "Ward method") +
+    theme(plot.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8)),
+  fviz_cluster(hc_conso, palette=choix_pal, geom="point", ellipse = TRUE, 
+               show.clust.cent = TRUE) +
+    labs(title= "Clusters' vizualisation with consolidation by partitioning") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8))
+)
+annotate_figure(p, 
+                top=text_grob("Hierarchical clustering vizualisation", 
+                  size = 12)) + theme_bw()
+```
+
+```{r eval=FALSE}
+# dendrogramme obtenu avec l'objet hc_conso
+# impossible à compiler sur nos ordinateurs
+fviz_dend(hc_conso, palette=choix_pal, cex = 0.5, k = 3, 
+            color_labels_by_k = TRUE,
+            main = "Dendrogram (with consolidation by partitioning)", subtitle = "Ward method") +
+    theme(plot.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8))
+```
+
+### Clusters' description
+
+The following tables are useful to give sense to the three groups depicted above. 
+
+$96.93\%$ of time observations which are strongly linked to a low level of temperatures are located in **cluster 1** and they account for $86.09\%$ of this group whereas this category only represents one quarter of all observations. In the meantime there is no observation with a very high rental level and $2.39	\%$ with a high rental level in cluster 1, whereas these two categories represent $50\%$ of all observations if put together.  So cluster 1 describes observations related to Winter season with a low or medium level of rental and low temperatures. 
+
+Looking at the second table, we see that **cluster 2** brings together Spring and Autumn related observations because $85.69	\%$ and $82.65\%$ of these categories are located in this cluster. Put together, more than $99\%$ of the cluster 2's individuals come from Spring and Autumns seasons. This group tends to represent large levels of rental as more than $60\%$ of the observations come from `High Rental`and `Very high Rental` categories put together. 
+
+As for **cluster 3**, it is the group which brings Summer related observations together as shown by the $100\%$ figure. As a whole, there are more observations with high and very high levels of rental in this cluster than in the others. $54.87\%$ of the `Very high rental` category is located in cluster 1, whereas it only represents one quarter of all observations.
+
+```{r results='asis'}
+cat("\\begin{table}[H]
+    \\centering",
+    for (i in 1:hc_conso$call$t$nb.clust){
+      tab <- hc_conso$desc.var$category[i] %>% 
+        as.data.frame() 
+      colnames(tab) <- c("Cla/Mod", "Mod/Cla", "Global", "p-value", "v-test")
+      tab %>%
+        mykable(titre=paste("Cluster", i, sep = " ")) %>%
+        print()
+},
+    "\\end{table}"
+  )
+
+```
+
+
+### The clusters' parangons
+
+In the three tables below we have the main features of each cluster's parangons which are the closest observations to the center of the cluster. The parangons give sense to the results found in the previous tables. 
+
+```{r results='asis'}
+cat("\\begin{table}[H]
+    \\centering",
+    for (i in 1:3){
+      filtre <- hc_conso$desc.ind$para[i] %>% as.data.frame() %>% 
+        rownames() %>% as.vector()
+      para_data <- mca_data[filtre,] 
+      para_data %>% 
+        mykable(titre=paste("Cluster", i, sep = " ", "'s parangons")) %>%
+        print
+  },
+    "\\end{table}"
+  )
+```
+
+### Dependency between the variables and each cluster 
+
+Each cluster depends on the four categorical variables used in the multiple correspondence analysis. It means that these variables are useful to interpret the clusters found by the algorithm. The $\chi^2$ test results depicted below illustrate the interdependence between the cluster variables and the four qualitative variables. 
+
+
+```{r}
+hc_conso$desc.var$test.chi2 %>% 
+  mykable(titre="Link between the cluster variables and the categorical variables ($\\chi^2$ test)")
+```
+
+Before applying hierarchical clustering, we did not know how many clusters exist in the data. The algorithm performed by `R` led us to identify three main groups in the `SeoulBike` dataset. These three groups are quite different one to another. The consolidation by partitioning increased the intercluster distance. Conversely the intracluster distance is quite small meaning the data points inside each cluster are close to each other, i.e. each group of observations is homogeneous. We think the clusters' distribution gives a good insight on the actual Seoul bike sharing service data. 
+
+
+# Conclusion
+
+
+Through the use of factor analysis combined with clustering, we managed to fine-tune the analysis of the `SeoulBike` dataset.
+
+Principal component analysis has allowed us to sort through the meteorological variables which were the most capable of explaining the number of rented bikes. We got out three significant principal components, the second one being strongly related to the bike rental level. Then, thanks to multiple correspondence analysis we have been able to study links between four categorical variables created from the quantitative variables. Although these four variables were all positively correlated, MCA has turned out to be a success with the distinction of several groups of individuals depending on seasons. To end up with factor analysis, has been decided the study of links between the number of rented bikes and temperatures, time of day and level of humidity by the means of correspondence analysis. Were identified the meteorological features which lead to a high rental level. Last but not least, thanks to hierarchical clustering onto MCA's results we have been able to determine three main clusters based on seasons and temperatures. The latter clusters describe and differentiate bike rental levels.
+
+From our analysis we are able to give some advice to the firm running the Seoul bike sharing service. In our opinion, here is how the number of available bikes should be allocated over a year. There should be a decrease in terms of available bikes in Winter as this season is associated with low rental levels. In reverse the number of available bikes should increase between Spring and Autumn seasons with a slight decrease during vacancy periods at mid-summer. The Seoul bike sharing service should step up the number of available bikes in June and September as shown by the third cluster, which is largely representative of both high temperatures and very high rental levels.
+
+Later this year, we may enhance our study with some classification tools, such as random forests and decision-trees which will lead us to develop accurate prediction models.
+
+# Appendix
+
+```{r}
+# Automatisation du test Student après application du test d'égalité de variances 
+
+St_test <- function(x,y){
+  if (class(y) == 'factor'){
+    if (var.test(x~y)$p.value < 0.05){
+      test <- t.test(x~y, var.equal = FALSE, alternative = "greater")
+    } else {
+      test <- t.test(x~y, var.equal = TRUE, alternative = "greater")
+    }
+     output <- formatC(c(test$estimate, test$p.value), big.mark=',') 
+     return(output)
+    }
+  else {
+    if (var.test(x,y)$p.value < 0.05){
+      test <- t.test(x,y, var.equal = FALSE, alternative = "greater")
+    } else {
+      test <- t.test(x,y, var.equal = TRUE, alternative = "greater")
+    }
+     output <- formatC(c(test$estimate, test$p.value), big.mark=" ") 
+     return(output)
+    }
+}
+```
+
+```{r}
+SeoulBike <- read.csv(file='SeoulBikeData.csv', sep=',', header=TRUE)
+SeoulBike$Date <- as.Date(SeoulBike$Date, format = "%d/%m/%Y")
+```
+
+```{r fig.width=9, fig.height=3.5}
+p <- SeoulBike %>%
+  ggplot(aes(x=Date, y=Rented.Bike.Count)) +
+  geom_line(color="#ADEFD1FF", alpha=0.6) +
+  xlab("") +
+  ylab("Rented bikes per hour") +
+  ggtitle("Evolution of the rented bike count between 01/12/17 and 30/11/18") +
+  theme(plot.title = element_text(size = 10)) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+
+ggarrange(p,ncol=1,nrow=1) + theme_bw()
+```
+
+In order to know whether the Seoul bike sharing service has been a success since its start-date, we compute two samples from the `SeoulBike` dataset : the first one dealing with the data related to December 2017 - the bike sharing service's start month - and the second one representing the November 2018 data which is the last month of the database.
+
+```{r}
+Dec17 <- SeoulBike %>% filter(Date <= '2017-12-31')
+Nov18 <- SeoulBike %>% filter(Date >= '2018-11-01')
+```
+
+```{r}
+rbind(head(Dec17[,c(1,2)],3), head(Nov18[,c(1,2)],3)) %>%
+  mykable(titre="Overview of the two samples' third rows")
+```
+
+By using the means of the `St_test` function we automated before, we compare the two samples' means to check whether the number of rented bikes is different between the two periods.
+
+We compute the following t-test with a 5$\%$ first species risk.
+
+$$\left\{
+    \begin{array}{ll}
+        H_0 : & \mu_1 = \mu_2  \\
+        H_1 : & \mu_1 > \mu_2
+    \end{array}
+\right.$$
+
+$\mu_1$ stands for the second sample rented bike count's expected value and $\mu_2$ the first one's.
+
+```{r}
+tab <- St_test(Nov18$Rented.Bike.Count,Dec17$Rented.Bike.Count) %>%
+  as.data.frame() %>% t()
+colnames(tab) <- c("mean in Dec 18","mean in Dec 17", "p-value")
+rownames(tab) <- 'Test results'
+tab %>% mykable(
+  titre='Comparison of the 2 samples with a Student test') 
+```
+
+The t-test's p-value being basically equal to 0, it can be said that $\mu_1$ is significantly higher than $\mu_2$. In other words the number of rented bikes has significantly increased since its start-date.
+
+
+The following plots depict this positive evolution. The daily count of rented bikes is plotted for both December 2017 and November 2018. 
+
+Computing the percent change between the two daily averages we found that the daily average rented bike count has increased by about 189%, that is to say it has almost been tripled over the period.
+
+```{r fig.width=14, fig.height=5}
+Daily_Dec17 <- aggregate(Rented.Bike.Count~Date, data=Dec17,FUN=sum)
+Daily_Nov18 <- aggregate(Rented.Bike.Count~Date, data=Nov18,FUN=sum)
+
+p1 <- Daily_Dec17 %>%
+  ggplot(aes(x=Date, y=Rented.Bike.Count)) +
+  geom_line( color="grey") +
+  geom_point(shape=21, color="black", fill="#69b3a2", size=2) +
+  geom_abline(slope=0, intercept=mean(Daily_Dec17$Rented.Bike.Count),
+              col='#819FF7', size=0.5, linetype='dashed') +
+  annotate(geom="text",x=as.Date("2017-12-02"),
+    y=5500,label="Daily Avg ", color="#819FF7") +
+  ggtitle("Daily number of rented bikes in December 2017") + 
+  labs(y="Rented bikes per day") + 
+  scale_y_continuous(limits=c(0,25000)) +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+
+p2 <- Daily_Nov18 %>%
+  ggplot(aes(x=Date, y=Rented.Bike.Count)) +
+  geom_line( color="grey") +
+  geom_point(shape=21, color="black", fill="#69b3a2", size=2) +
+  geom_abline(slope=0, intercept=mean(Daily_Nov18$Rented.Bike.Count),
+              col='#819FF7', size=0.5, linetype='dashed') +
+  annotate(geom="text",x=as.Date("2018-11-02"),
+    y=16500,label="Daily Avg ", color="#819FF7") +
+  ggtitle("Daily number of rented bikes in November 2018") + 
+  labs(y="Rented bikes per day") +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+
+ggarrange(p1,p2,ncol=2,nrow=1) + theme_bw()
+```
+
+# Resources 
+
+## Principal component analysis 
+
+http://www.sthda.com/english/wiki/factoextra-r-package-easy-multivariate-data-analyses-and-elegant-visualization
+
+https://rpkgs.datanovia.com/factoextra/reference/fviz_pca.html
+
+https://medium.com/@hafezahmad/principal-component-analysis-pca-with-r-6ba954a54b34
+
+https://en.wikipedia.org/wiki/Principal_component_analysis#Compute_the_cumulative_energy_content_for_each_eigenvector
+
+## Correspondence analysis 
+
+https://towardsdatascience.com/correspondence-analysis-using-r-cd57675ffc3a
+
+## Multiple correspondence analysis 
+
+http://www.sthda.com/french/articles/38-methodes-des-composantes-principales-dans-r-guide-pratique/75-acm-analyse-des-correspondances-multiples-avec-r-l-essentiel/
+
+https://juliescholler.gitlab.io/publication/m1ade-2021/
+
+## Clustering 
+
+https://juliescholler.gitlab.io/publication/m1ade-2021/
+
+https://www.statmethods.net/advstats/cluster.html
+
+https://www.datanovia.com/en/courses/hierarchical-clustering-in-r-the-essentials/
+
+
+
+

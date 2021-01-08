@@ -1,0 +1,1090 @@
+---
+title: "Exploratory Data Analysis of the Seoul bike sharing service"
+author: "Hugo Cornet, Pierre-Emmanuel Diot, Guillaume Le Halper, Djawed Mancer"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    dev: png
+    number_section: false
+    theme: lumen
+    highlight: "pygments"
+---
+
+```{r setup, include=FALSE,warning=FALSE, comment=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, comment=FALSE, message=FALSE,
+                        fig.width=8)
+```
+
+
+```{r packages, message=FALSE,warning=FALSE}
+library(data.table)
+library(stargazer)
+library(corrplot)
+library(ggplot2)
+library(RColorBrewer)
+library(lmtest)
+library(car)
+library(miscTools)
+library(frontier)
+library(data.table)
+library(skimr)
+library(readxl)
+library(lmtest)
+library(sandwich)
+library(broom)
+library(lattice)
+library(plyr)
+library(dplyr)
+library(forecast)
+library(fpp2)
+library(knitr)
+library(kableExtra)
+library(ggpubr)
+library(leaps)
+library(MASS)
+library(GGally)
+library(ggcorrplot)
+library(orcutt)
+library(ggfortify) 
+library(lubridate)
+library(readxl)
+library(plotly)
+library(hrbrthemes)
+library(ggthemes)
+library(Metrics)
+library(gvlma)
+library(rstatix)
+library(plotly)
+library(forcats)
+library(AICcmodavg)
+library(ggridges)
+library(tikzDevice)
+library(pixiedust)
+```
+
+
+```{r}
+# Automatisation d'une fonction pour la mise en forme des tableaux
+
+if (knitr::is_latex_output()) {
+  kable_1 <- function(tab, transp = FALSE, digits =2, titre=NULL, font_size = NULL,...){
+      if( transp ){
+        tab %>% t() %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+          kable_styling(full_width = F, position = "center", 
+                         latex_options = c("striped", "condensed", "hold_position"),
+                         font_size =  font_size)
+      } else {
+        tab %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+          kable_styling( full_width = F, position = "center",
+                         latex_options = c("striped", "condensed", "hold_position"),
+                         font_size = font_size)
+      }
+    }
+  } else {
+  kable_1<-function(tab, transp = FALSE, digits = 2, titre=NULL, font_size = NULL, ...){
+      if(transp){
+        tab %>% t() %>% kable(caption=titre, digits = digits,...) %>%
+          kable_styling(full_width = F, position = "center",
+                        bootstrap_options = c("striped", "condensed"))  
+      } else {
+        tab %>% kable(caption=titre, digits = digits, ...) %>%
+          kable_styling(full_width = F, position = "center",
+                        bootstrap_options = c("striped", "condensed"))
+      }
+    }
+  }
+```
+
+
+```{r}
+# Automatisation du test Student après application du test d'égalité de variances 
+
+St_test <- function(x,y){
+  if (class(y) == 'factor'){
+    if (var.test(x~y)$p.value < 0.05){
+      test <- t.test(x~y, var.equal = FALSE, alternative = "greater")
+    } else {
+      test <- t.test(x~y, var.equal = TRUE, alternative = "greater")
+    }
+     output <- formatC(c(test$estimate, test$p.value), big.mark=',') 
+     return(output)
+    }
+  else {
+    if (var.test(x,y)$p.value < 0.05){
+      test <- t.test(x,y, var.equal = FALSE, alternative = "greater")
+    } else {
+      test <- t.test(x,y, var.equal = TRUE, alternative = "greater")
+    }
+     output <- formatC(c(test$estimate, test$p.value), big.mark=" ") 
+     return(output)
+    }
+}
+```
+
+```{r}
+# Thème utilisé pour les différents graphiques
+theme_set(theme_ipsum())
+```
+
+# Goal of the exploratory analysis
+
+Our team has been assigned to study in a descriptive way the Seoul bike sharing service. For this purpose we will use both descriptive and inferential statistics in order to find correlations, trends and patterns between the different variables of the 'SeoulBike' database.
+
+# Problematic
+
+
+- To what extent has the Seoul bike sharing service been a success since its start-date ?
+
+- How much can this time path evolution be explained by the dataset's variables ?
+
+
+# Introducing the data
+
+
+First of all, we import the 'SeoulBike' dataset which is a .csv file, using the read.csv() function. The database focuses on the number of rented bikes in Seoul from December 2017 to November 2018. 
+
+```{r}
+# importing the file in an R dataframe
+SeoulBike <- read.csv(file='SeoulBikeData.csv', sep=',', header=TRUE)
+```
+
+The dataset is made of `r nrow(SeoulBike)` observations and `r ncol(SeoulBike)` variables. There are several meteorological variables among which the temperature in °C, the level of solar radiation, the wind speed... 
+
+The other variables are time related. For each hour of day corresponds a rented bike count, which means there are 24 counts per day. 
+
+
+```{r}
+SeoulBike %>% rmarkdown::paged_table()
+```
+
+
+```{r eval=FALSE}
+colnames(SeoulBike) 
+# Nb : Le point de rosée ou température de rosée (Dew Point) est la température sous laquelle de la rosée se dépose naturellement```
+```
+
+```{r eval=FALSE}
+str(SeoulBike)
+sum(is.na(SeoulBike))
+```
+
+
+```{r}
+# Suppresion des lignes duppliquées (s'il y en a)
+SeoulBike <- SeoulBike %>% distinct()
+```
+
+
+### The dataset's structure
+
+
+Before digging into the data analysis it is essential to transform the 'Date' variable to the appropriate format.
+
+Here is a summary of the types of variables included in the dataframe. There are both qualitative and quantitative variables.  
+
+```{r}
+# Mise au format 'date' de la variable Date
+SeoulBike$Date <- as.Date(SeoulBike$Date, format = "%d/%m/%Y")
+```
+
+
+```{r eval=FALSE}
+str(SeoulBike)
+```
+
+```{r fig.width=10}
+data.frame(variable = names(SeoulBike),
+           class = sapply(SeoulBike, class),
+           row.names = NULL) %>% kable_1()
+```
+
+
+**As we have a huge number of observations in the dataset,it will not be needed to verify the normality hypothesis of the samples to carry out the statistical tests.**
+
+In order to optimize our code we created an automated t-test function whose alternative is 'greater'.
+
+
+Going into the data, we found that no bikes were rented during the no functioning days. We think it may be due to the Seoulite cultural landscape. That's why we assume the bike rental service is closed during these days, as well as banks, post offices,...
+
+In order to be more accurate we decided to delete the rows related to the no functioning days.
+
+```{r}
+tab <- rbind(formatC(sum(SeoulBike$Rented.Bike.Count[SeoulBike$Functioning.Day=='Yes']),
+                     big.mark = ","),
+      sum(SeoulBike$Rented.Bike.Count[SeoulBike$Functioning.Day=='No']))
+colnames(tab) <- 'Total Rented Bike Count'
+rownames(tab) <- c('Functioning day', 'No functioning day')
+
+tab %>% kable_1()
+
+SeoulBike <- SeoulBike %>% filter(Functioning.Day=='Yes')
+```
+
+
+```{r eval=FALSE}
+summary(SeoulBike)
+```
+
+
+### Correlation matrix
+
+```{r}
+quantvar <- SeoulBike[,c(2:11)]
+```
+
+```{r fig.width=40, fig.height=30}
+ggcorr(quantvar, method = c("everything", "pearson"), nbreaks=10, palette='RdGy',
+       label=TRUE, label_size=15, label_color='white', 
+       color = "grey50", size=15, hjust = 0.9, layout.exp = 2) + 
+  theme(legend.position = "none")
+```
+
+The previous correlation matrix indicates a strong correlation between 'Dew.Point.temperature..C.' and 'Temperature..C.' which means a huge colinearity of the two variables.
+
+
+In the mean time, there are 5 insignificant correlations. The latter match the zeros in the matrix. 
+
+
+Here are the variables with positive influence on the number of rented bikes (decreasing order) :
+
+- Temperature
+- Hour
+- Solar Radiation
+- Wind Speed
+- Visibility
+  
+
+On the other side these are the variables with negative impact on the number of rented bikes (decreasing order) :
+
+- Humidity
+- Rainfall
+- Snowfall
+  
+
+# Overall aspects of the number of rented bikes
+
+
+### Statistics
+
+
+Above all, this variable counts the **hourly** number of rented bikes for each day between December 2017 and November 2018.
+
+```{r}
+stats <- function(x){
+  c(Min=min(x), quantile(x,probs=0.25), Median = median(x),
+    quantile(x, probs=0.75),Max=max(x),
+    Mean = mean(x), Sd=sd(x))
+  }
+```
+
+```{r}
+SeoulBike[2] %>% sapply(stats) %>% formatC(big.mark=" ") %>% 
+  kable_1(transp=TRUE,titre =
+    "Descriptive statistics about the number of rented bikes per hour in Seoul")
+```
+
+Looking at the table we notice an important scope of the 'Rented.Bike.Count' variable which means that demand for rental bikes has been fluctuating during the whole period.
+
+```{r}
+p <- SeoulBike %>%
+  ggplot(aes(x=Rented.Bike.Count)) +
+    geom_density(color="#ADEFD1FF", fill="#ADEFD1FF", alpha=0.7) +
+  labs(title = "Rented Bikes Count Distribution",
+       x="Number of rented bikes", y="Density") +
+  geom_vline(aes(xintercept=mean(Rented.Bike.Count)),
+            color="#00203FFF", linetype="dashed", size=.5) +
+  annotate(geom="text", x=870, y=0.0010, label="Mean",
+              color="#00203FFF") +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+
+p <- ggplotly(p)
+p
+```
+
+
+From this plot we can approximate the hourly rented bike count's expected value using the empirical mean as estimator :
+$$\widehat{\mathbb{E}(X)} = \overline{X}$$
+
+where $X$ stands for the rented bike count variable. We find $\overline{x} \approx 729$.
+
+
+This result implies there is about 50% chance that the hourly number of rented bikes be lower (resp. greater) than 729.
+
+
+### The bike sharing service's evolution
+
+
+On the following plot, an increase of the rented bikes count is noted from March to October. The better the weather is, the more people ride their bike.
+
+Furthermore, an overall increase of the number of rented bikes draws attention between the first (December 2017) and last (November 2018) months. We'll check its significance by testing it.
+
+There also might be seasonality in the time series which might be caused by the weather. If we had the data over a larger period we may observe variations in the rented bike count that occur at specific regular intervals. It could be a regular increase from the end of Spring to the beginning of Autumn and a regular decrease from Autumn to Spring.
+
+```{r}
+p <- SeoulBike %>%
+  ggplot(aes(x=Date, y=Rented.Bike.Count)) +
+  geom_line(color="#ADEFD1FF", alpha=0.6) +
+  xlab("") +
+  ylab("Rented bikes per hour") +
+  ggtitle("Evolution of rented bike count between 01/12/17 and 30/11/18") +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+
+p <- ggplotly(p)
+p
+```
+
+### Has the Seoul bike sharing service been a success since its start-date ?
+
+
+In order to answer the previous question we compute two samples from the 'SeoulBike' dataset : the first one dealing with the data related to December 2017 - the bike sharing service's start month - and the second one representing the November 2018 data which is the last month of the database.
+
+
+One cannot but admit that the rented bike count has almost increased threefold. We will try to explain this important rise.
+
+
+```{r}
+Dec17 <- SeoulBike %>% filter(Date <= '2017-12-31')
+Nov18 <- SeoulBike %>% filter(Date >= '2018-11-01')
+```
+
+```{r}
+rbind(head(Dec17[,c(1,2)],3), head(Nov18[,c(1,2)],3)) %>%
+  kable_1(titre="Overview of the two samples' third rows")
+```
+
+By using the means of the Student test function we automated before, we compare the two samples' means to check whether the number of rented bikes is different between the two periods.
+
+We compute the following t-test with a 5$\%$ first species risk.
+
+$$\left\{
+    \begin{array}{ll}
+        H_0 : & \mu_1 = \mu_2  \\
+        H_1 : & \mu_1 > \mu_2
+    \end{array}
+\right.$$
+
+$\mu_1$ stands for the second sample rented bike count's expected value and $\mu_2$ the first one's.
+
+```{r}
+tab <- St_test(Nov18$Rented.Bike.Count,Dec17$Rented.Bike.Count) %>%
+  as.data.frame() %>% t()
+colnames(tab) <- c("mean in Dec 18","mean in Dec 17", "p-value")
+rownames(tab) <- 'Test results'
+tab %>% kable_1(
+  titre='Comparison of the 2 samples with a Student test') 
+```
+
+The t-test's p-value being basically equal to 0, it can be said that $\mu_1$ is significantly higher than $\mu_2$. In other words the number of rented bikes has significantly increased since its start-date.
+
+
+The following plots depict this positive evolution. The daily count of rented bikes is plotted for both December 2017 and November 2018. 
+
+Computing the percent change between the two daily averages we found that the daily average rented bike count has increased by about 189%, that is to say it has almost been tripled over the period.
+
+
+```{r eval=FALSE}
+(mean(Daily_Nov18$Rented.Bike.Count)-mean(Daily_Dec17$Rented.Bike.Count))/mean(Daily_Dec17$Rented.Bike.Count)
+```
+
+
+```{r}
+Daily_Dec17 <- aggregate(Rented.Bike.Count~Date, data=Dec17,FUN=sum)
+Daily_Nov18 <- aggregate(Rented.Bike.Count~Date, data=Nov18,FUN=sum)
+
+ggplotly(
+  Daily_Dec17 %>%
+  ggplot(aes(x=Date, y=Rented.Bike.Count)) +
+  geom_line( color="grey") +
+  geom_point(shape=21, color="black", fill="#69b3a2", size=2) +
+  geom_abline(slope=0, intercept=mean(Daily_Dec17$Rented.Bike.Count),
+              col='#819FF7', size=0.5, linetype='dashed') +
+  annotate(geom="text",x=as.Date("2017-12-02"),
+    y=5500,label="Daily Avg ", color="#819FF7") +
+  ggtitle("Daily number of rented bikes in December 2017") + 
+  labs(y="Rented bikes per day") + 
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+)
+
+ggplotly(
+  Daily_Nov18 %>%
+  ggplot(aes(x=Date, y=Rented.Bike.Count)) +
+  geom_line( color="grey") +
+  geom_point(shape=21, color="black", fill="#69b3a2", size=2) +
+  geom_abline(slope=0, intercept=mean(Daily_Nov18$Rented.Bike.Count),
+              col='#819FF7', size=0.5, linetype='dashed') +
+  annotate(geom="text",x=as.Date("2018-11-02"),
+    y=16000,label="Daily Avg ", color="#819FF7") +
+  ggtitle("Daily number of rented bikes in November 2018") + 
+  labs(y="Rented bikes per day") +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8))
+)
+```
+
+
+The next two parts will aim at finding relationships between the rented bike count variable and the other ones in order to explain the Seoul service's success.
+
+
+
+# Influence of time variables on the number of rented bikes
+
+
+### Rented bike count per month
+
+
+Firstly we decided to aggregate the data by suming the number of bikes that have been rented during a month. 
+
+We will seperate the months into two classes on the basis of the monthly rented bike count median.
+
+```{r}
+Monthly_RentedBike <- aggregate(Rented.Bike.Count~month(Date), data=SeoulBike,FUN=sum)
+Monthly_RentedBike$Month <- as.factor(Monthly_RentedBike$`month(Date)`)
+Monthly_RentedBike$Month <- month.abb[Monthly_RentedBike$Month]
+Monthly_RentedBike <- Monthly_RentedBike[,-1]
+```
+
+```{r}
+Monthly_RentedBike$'Kind of month' <- ifelse(
+  Monthly_RentedBike$Rented.Bike.Count>median(Monthly_RentedBike$Rented.Bike.Count),'Good','Bad'
+    )
+```
+
+
+```{r }
+p <- Monthly_RentedBike %>%
+  mutate(Month = fct_reorder(Month, Rented.Bike.Count)) %>%
+  ggplot(aes(x=Month, y=Rented.Bike.Count, fill=`Kind of month`)) +
+    geom_bar(stat="identity", alpha=.6, width=.4) +
+    coord_flip() +
+    xlab("") +
+    ylab("Rented bike count") +
+    ggtitle("Monthly rented bike count in decreasing order") +
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    theme(axis.title.x = element_text(size = 10)) +
+    theme(axis.title.y = element_text(size = 10)) +
+    theme(legend.title = element_text(size = 10))
+
+p <- ggplotly(p)
+p
+```
+
+From the table, one notes a dichotomy between months. June, July, May, Sept, Aout, Oct stand apart, especially June, with a total of nearly 900 000 rented bikes. This may reflect the more convenient weather.
+
+On the opposite, winter-related months such as January, February and December don't do quite well. Indeed, the total amount of these 3 months do not even reach half a million. How can this be explained ? These are cold months. Moreover, the service has only been set up in December. It had not reached its maturity yet.
+
+
+### Rented bike count per day 
+
+
+In this part we computed some statisical indicators about the daily number of rented bikes. What is striking in the following tables is the increase of both the mean and the variability of the number of bikes which are rented each day.
+
+```{r}
+Daily_RentedBike <- aggregate(Rented.Bike.Count~Date, data=SeoulBike,FUN=sum)
+colnames(Daily_RentedBike) <- c('Date', 'Daily_RentedBike_Count')
+```
+
+```{r }
+# Avg rented bike count per day and for each month 
+Avg_RentedBike_by_month <- c(NULL)
+  for (i in 1:12){
+    Avg_RentedBike_by_month[i] <-mean(
+      Daily_RentedBike$Daily_RentedBike_Count[month(Daily_RentedBike$Date)==i]
+      )
+  }
+
+Avg_RentedBike_by_month <- as.data.frame(Avg_RentedBike_by_month)
+Avg_RentedBike_by_month$Month <- month.abb[as.numeric(rownames(Avg_RentedBike_by_month))]
+
+# sd = standard deviation
+Avg_RentedBike_by_month$sd <- c(NULL)
+  for (i in 1:12){
+    Avg_RentedBike_by_month$sd[i] <-sd(
+      Daily_RentedBike$Daily_RentedBike_Count[month(Daily_RentedBike$Date)==i]
+      )
+  }
+
+# se = standard error
+Avg_RentedBike_by_month$se <- c(NULL)
+  for (i in 1:12){
+    Avg_RentedBike_by_month$se[i] <- Avg_RentedBike_by_month$sd[i]/sqrt(
+      length(Daily_RentedBike$Daily_RentedBike_Count[month(Daily_RentedBike$Date)==i])
+      )
+  }
+
+# CI = calculated as t * SE, where t is the Student quantile
+
+alpha=0.05
+
+Avg_RentedBike_by_month$'Error bound' <- c(NULL)
+  for (i in 1:12){
+    Avg_RentedBike_by_month$'Error bound'[i] <- qt((1-alpha)/2 + .5, length(Daily_RentedBike$Daily_RentedBike_Count[month(Daily_RentedBike$Date)==i])-1)*
+      Avg_RentedBike_by_month$se[i]
+  }
+
+# Reordering the columns
+
+Avg_RentedBike_by_month <- Avg_RentedBike_by_month[,c('Month', 'Avg_RentedBike_by_month',
+                                                      'sd', 'Error bound')]
+colnames(Avg_RentedBike_by_month) <- c('Month', 'Mean', 'sd', 'Error bound')
+
+# Reordering levels 
+
+Avg_RentedBike_by_month$Month <- as.factor(Avg_RentedBike_by_month$Month)
+Avg_RentedBike_by_month$Month <- ordered(Avg_RentedBike_by_month$Month,
+  c("Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov"))
+
+# Showing Avg_RentedBike_by_month
+
+Avg_RentedBike_by_month %>% kable_1(
+  titre='Statistical properties of the daily average number of rented bikes for each month')
+
+```
+
+Thanks to the following chart, our previous assumptions are confirmed analytically. June is clearly above other months and the three winter-related months had a hard time compared to the other months.
+
+The rise in the confidence intervals' width illustrates that the more bikes are rented, the more fluctuation appears.
+
+```{r}
+colnames(Avg_RentedBike_by_month)[4] <- 'CI'
+ggplot(Avg_RentedBike_by_month) +
+  geom_bar(aes(x=Month, y=Mean), stat="identity", fill="skyblue", alpha=0.7) +
+  geom_errorbar(aes(x=Month, ymin=Mean-CI, ymax=Mean+CI),
+                width=0.4, colour="orange", alpha=0.9, size=1.5) +
+  labs(title = 
+         'Daily average number of rented bikes for each month \n and confidence interval (5%)',
+       x="", y="Number of rented bikes") +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8)) 
+```
+
+### Hourly rented bike count
+
+Deeping into the study, we had to focus on the hourly rented bike count. We've cut the days into 4 periods : 
+
+- Night
+- Morning
+- Afternoon
+- Evening
+
+At first sight, it seems like the bike sharing service's number of users increases from 6 a.m. to 6 p.m. then decreases until reaching its minimum level at 4 a.m.
+
+
+```{r}
+Hourly_RentedBike_avg <- c(NULL)
+for (i in seq(1,24)){
+  Hourly_RentedBike_avg[i] = mean(SeoulBike$Rented.Bike.Count[SeoulBike$Hour==i-1])
+}
+
+Hourly_RentedBike_avg <- as.data.frame(Hourly_RentedBike_avg)
+Hourly_RentedBike_avg$Hour <- as.numeric(rownames(Hourly_RentedBike_avg)) - 1
+
+Hourly_RentedBike_avg$TimeOfDay <- as.factor(
+  ifelse(Hourly_RentedBike_avg$Hour<=6, "Night",
+                              ifelse(Hourly_RentedBike_avg$Hour<=12, "Morning",
+                                     ifelse(Hourly_RentedBike_avg$Hour<=18, "Afternoon",
+                                            "Evening")))
+  )
+```
+
+```{r }
+p <- ggplot(Hourly_RentedBike_avg, aes(x=Hour, y=Hourly_RentedBike_avg, shape=TimeOfDay,
+                                  color=TimeOfDay)) + 
+  geom_point(size=2) +
+  scale_x_continuous(breaks=seq(0,24,2)) +
+  labs(title = 'Average number of rented bikes per hour',
+       x="Hour", y="Number of rented bikes") +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8)) +
+  theme(legend.position='none')
+ggplotly(p)
+```
+
+Are to be compared the daily time and the night time rents. Test results show quite a huge and significant gap between the two periods' means with an extremely low p-value. Therefore, the null hypothesis of equality of means is rejected.
+
+
+```{r}
+# creating a categorical variable splitting time of day into two class : daytime & nightime
+SeoulBike$Time <- as.factor(
+  ifelse(SeoulBike$Hour>=6&SeoulBike$Hour<=18,"DayTime","NightTime")
+)
+```
+
+```{r}
+tab <- St_test(SeoulBike$Rented.Bike.Count,SeoulBike$Time) %>%
+  as.data.frame() %>% t()
+
+colnames(tab)[3] <- 'p-value'
+rownames(tab) <- 'Test results'
+tab %>% kable_1(
+  titre='Do people rent more bikes during daytime in Seoul ?')
+```
+
+Another comparison was made, maybe a little bit less obvious : number of renting bikes in the afternoon versus in the evening. The associated test led us to this conclusion : there isn't a meaningful difference between the two means.
+
+
+```{r }
+SeoulBike$TimeOfDay <- as.factor(
+  ifelse(SeoulBike$Hour<=6, "Night",
+                              ifelse(SeoulBike$Hour<=12, "Morning",
+                                     ifelse(SeoulBike$Hour<=18, "Afternoon", "Evening")))
+)
+```
+
+```{r}
+tab <- St_test(
+  SeoulBike$Rented.Bike.Count[SeoulBike$TimeOfDay=='Afternoon'],
+   SeoulBike$Rented.Bike.Count[SeoulBike$TimeOfDay=='Evening']) %>%
+  as.data.frame() %>% t()
+
+colnames(tab) <- c('Afternoon', 'Evening','p-value')
+rownames(tab) <- 'Test results'
+tab %>% kable_1(
+  titre='Number of bikes rented in the afternoon versus in the evening')
+```
+
+At that point, one question arises : how could the Seoul bike sharing service optimize its supply of bikes during daytime ? Given our observations and test results, it might be wise to prioritize the service between  7am to 10 pm.
+
+### Impact of the holidays on the number of rented bikes in Seoul
+
+
+Is the number of rented bikes influenced by the holidays ? 
+
+In response, we decided to draw a boxplot representing the rented bike count depending on the two-levels-variable 'Holiday'.
+
+
+```{r }
+ggplotly(
+  ggplot(data = SeoulBike, aes(x=Holiday,y=Rented.Bike.Count, color=Holiday)) + 
+  geom_boxplot()+
+  scale_color_brewer(palette="Set2") + 
+  labs(title = 'Do holidays have an impact on the number of rented bikes ?',
+       y='Rented bikes per hour',x='') + 
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(axis.title.x = element_text(size = 8)) +
+  theme(axis.title.y = element_text(size = 8)) +
+  theme(legend.title = element_text(size = 8)) +
+  theme(legend.position = "none")
+)
+```
+
+
+We can easily notice the median on vacation time is half the size of the other one. Additionally, each "No Holidays" quantile is much more higher than its "rival". This probably reflects a negative impact of the holidays.
+
+Besides, we discern a lower spread of rented bikes on holidays, whereas the higher values tend to skyrocket on "No Holidays".
+
+
+To ensure we are not wrong, we obviously needed to test it. We wanted to know whether or not the impact of holidays on bike rental is statistically significant. To do so, we carried out another mean-test.
+
+```{r}
+SeoulBike$Holiday <- factor(SeoulBike$Holiday, c("No Holiday", "Holiday"))
+```
+
+
+```{r}
+tab <- St_test(SeoulBike$Rented.Bike.Count,SeoulBike$Holiday) %>%
+  as.data.frame() %>% t()
+
+colnames(tab)[3] <- 'p-value'
+rownames(tab) <- 'Test results'
+tab %>% kable_1(
+  titre='Is the impact of holidays on bike rental statistically significant ?')
+```
+
+The results are clear. Holidays bring a noteworthy impact on the number of rented bikes.
+
+
+
+# Analysis of the meteorological variables of the dataset
+
+
+Now that we have found patterns between the time variables and the rented bike count variable, it seems relevant to focus on the other part of the dataset. It's time to use the weather-related variables to explain the evolution of the Seoul bike sharing service.
+
+
+### What is the weather like in Seoul ?
+
+```{r}
+# mise en km/h de la variable 'vitesse du vent'
+SeoulBike$Wind.speed..km.h. <- SeoulBike$Wind.speed..m.s.*3.6
+```
+
+```{r}
+SeoulBike[,c(4,7,9,17)] %>% sapply(stats) %>% formatC(big.mark=" ") %>% 
+  kable_1(transp=TRUE,titre =
+    "Descriptive statistics about some meteorogical variables")
+```
+
+#### The temperatures
+
+
+As shown in both the density plot and the previous table, the Seoul temperature fluctuates quite much. From the plot we can divide the temperature's distribution into two distinct groups : cold and warm temperatures. 
+
+These two features are the consequence of the city's continental climate.
+
+
+```{r}
+p <- SeoulBike %>%
+  ggplot(aes(x=Temperature..C.)) +
+    geom_density(fill="#81DAF5", color="#81DAF5", alpha=0.5) +
+  geom_vline(aes(xintercept=mean(Temperature..C.)),
+            color="#086A87", linetype="dashed", size=1) +
+  annotate(geom="text", x=15, y=0.032, label="Mean",
+              color="#086A87") +
+  labs(title = "Temperatures' distribution",
+       x="Temperatures in °C", y="Density") +
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+p <- ggplotly(p)
+p
+    
+```
+
+The following stacked density graph highlights the fact developed above. The Winter's density is almost perfectly symmetrical to the Summer's. The Spring's and Autumn's densities can be viewed as transition periods between the two opposite seasons. 
+
+```{r}
+p <- SeoulBike %>%
+  ggplot(aes(x=Temperature..C., fill=Seasons, color=Seasons)) +
+    geom_density(position = "stack", alpha=0.5) +
+    labs(title = "Temperatures' distribution depending on Seasons",
+       x="Temperature in °C", y="Density") +
+    theme(plot.title = element_text(size = 10, face = "bold")) 
+
+p <- ggplotly(p)
+p
+```
+
+#### The solar radiation
+
+Seoul is not known to be a sunny place. On top of that, the solar radiation level does not fluctuate that much.
+
+```{r}
+p <- SeoulBike %>%
+  ggplot(aes(x=Solar.Radiation..MJ.m2.)) +
+    geom_histogram(binwidth=0.1, fill="#F5DA81", color="#e9ecef", alpha=0.9) +
+    ggtitle("Repartition of solar radiation in Seoul") +
+    labs(x='Solar radiation (MJ.m²)') +
+    theme(plot.title = element_text(size = 10, face = "bold"))  
+
+
+fig <- ggplotly(p)
+
+fig
+```
+
+
+#### The wind speed
+
+
+On average the Seoul wind speed is equal to 6 km.h which is much lower than the worldwide average (~35 km/h). 
+The low variability between seasons indicates Seoul is a city in which there is very little wind throughout the year. This may be a good point for bike rental.
+
+
+```{r}
+# densité vitesse du vent selon 
+p <- ggplot(data=SeoulBike, aes(x=Wind.speed..km.h., group=Seasons, color=Seasons)) +
+    geom_density(adjust=1.5, alpha=.7)  +
+    scale_color_brewer(palette="Set2") +
+    labs(title = "Wind speed's distribution through seasons",
+       x="Wind speed in km.h", y="Density") +
+    theme(plot.title = element_text(size = 10, face = "bold")) 
+
+p <- ggplotly(p)
+p
+```
+
+
+
+### How do meteorological variables influence the number of rented bikes in Seoul ?
+
+#### The evolution of rented bikes through seasons
+
+```{r}
+ggplotly(
+  ggplot(data = SeoulBike, aes(x=Seasons,y=Rented.Bike.Count, color=Seasons)) + 
+  geom_boxplot() +
+  scale_color_brewer(palette="Set2") + 
+  labs(title = 'Does the number of rented bikes differ in seasons ?',
+       y='Rented bikes per hour',x='') +
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(legend.position = "none")
+)
+```
+
+Winter has the lowest median and the number of rented bikes is less spread than for the other seasons. There is no need to carry out a test to verify whether the number of rented bikes is lower during Winter.
+
+However, the boxplots for the three other seasons led us to conduct a **one-way anova test** for comparing means.
+
+The test's hypothesis are defined as follow :
+
+$$\left\{
+    \begin{array}{ll}
+        H_0 : & \mu_i = \mu\ ;\ \forall i =1,2,3  \\
+        H_1 : & \exists \ i \neq j \ | \ \mu_i \neq \mu_j
+    \end{array}
+\right.$$
+
+where $\mu_i$ represents the rented bike count expected value for the season $i$.
+
+```{r eval=TRUE}
+# Compute the analysis of variance
+AOV <- aov(Rented.Bike.Count ~ Seasons, data = SeoulBike[SeoulBike$Seasons!='Winter',])
+# Summary of the analysis
+sum_AOV <- unlist(summary(AOV))
+sum_AOV <- as.data.frame(sum_AOV[c(1,7,9)])
+rownames(sum_AOV) <- c('Df', 'Test statistic', 'p-value')
+colnames(sum_AOV) <- 'Test results'
+sum_AOV %>% kable_1(titre="Anova test's results")
+```
+
+
+As the p-value is less than the 0.05 significance level, we can conclude there are significant differences in terms of rented bikes among the seasons.
+
+#### The impact of the temperatures
+
+```{r}
+Daily_RentedBike <- cbind(
+  aggregate(Rented.Bike.Count~Date, data=SeoulBike,FUN=sum),
+  aggregate(Temperature..C.~Date, data=SeoulBike,FUN=mean)[2],
+  aggregate(Solar.Radiation..MJ.m2.~Date, data=SeoulBike,FUN=mean)[2],
+  aggregate(Wind.speed..km.h.~Date, data=SeoulBike,FUN=mean)[2],
+  aggregate(Visibility..10m.~Date, data=SeoulBike,FUN=mean)[2]
+  )
+colnames(Daily_RentedBike)[3:6] <- c("Temp_avg", "Sol_Rad_avg", "Wind_Speed_avg", "Visibility_avg")
+```
+
+
+```{r}
+Q2 <- quantile(Daily_RentedBike$Temp_avg, probs=seq(0,1,0.25)[3])
+Q3 <- quantile(Daily_RentedBike$Temp_avg, probs=seq(0,1,0.25)[4])
+```
+
+
+
+```{r}
+p <- ggplot(data = Daily_RentedBike, aes(x=Temp_avg,
+                                         y=Rented.Bike.Count)) +
+  geom_point(size=0.5, color='#848484') +
+  geom_smooth(size=0.5) +
+  # adding Q2 & Q3 to the plot
+  geom_vline(
+    xintercept=Q2,
+    color='#F78181',
+    linetype="dashed", size=0.5) +
+  geom_vline(
+    xintercept=Q3,
+    color='#F78181', 
+    linetype="dashed", size=0.5) +
+  annotate(geom="text", x=15, y=37000, label="Q2",
+              color="#F78181") +
+  annotate(geom="text", x=24, y=37000, label="Q3",
+              color="#F78181") + 
+  labs(title = 'Number of rented bikes depending on temperatures',
+       x='Daily average temperature',
+       y='Rented bike count per day') + 
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+p <- ggplotly(p)
+p
+```
+
+There is an inverted U-shaped relationship between the daily rented bike count and the daily average temperature. It implies there is an optimal temperature level which maximizes the number of rented bikes.
+
+Using the two dashed vertical lines representing the daily average temperatures' median and third quantile, we created a categorical variable that distinguishes the temperature levels :
+
+- 'Low' : the average temperature is lower than the median of the average temperatures
+- 'Medium' : the average temperature is included between the median and the third quantile of the average temperatures
+- 'High': the average temperature is higher than the third quantile of the average temperatures
+
+Then we conducted a t-test to compare means between the levels 'Medium' and 'High'.
+
+
+```{r}
+# creating a categorical variable on temperatures : low temperatures (< Q3) VS high temperatures (>Q3)
+
+Daily_RentedBike$TempLvl <- as.factor(
+  ifelse(
+    Daily_RentedBike$Temp_avg<Q2,
+         "Low",
+         ifelse(Daily_RentedBike$Temp_avg<=Q3,
+         "Medium", "High")
+    )
+)
+
+Daily_RentedBike$TempLvl <- factor(Daily_RentedBike$TempLvl, c('Low','Medium','High'))
+```
+
+```{r}
+ggplotly(
+  ggplot(data = Daily_RentedBike, aes(x=TempLvl,y=Rented.Bike.Count,colour=TempLvl)) + 
+  geom_boxplot() +
+  scale_fill_manual(values=c("#F8E6E0", "#F79F81", "#B43104")) +
+  scale_colour_manual(values=c("#F8E6E0", "#F79F81", "#B43104")) +
+  labs(title = 'Do temperature levels have an impact on the number of rented bikes ?',
+       y='Rented bikes per day',x='Temperature level') + 
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  theme(legend.position = "none")
+)
+```
+
+
+
+```{r}
+dfTest <- Daily_RentedBike %>% filter(TempLvl=="Medium"|TempLvl=="High")
+dfTest$TempLvl <- droplevels(dfTest$TempLvl)
+dfTest$TempLvl <- factor(dfTest$TempLvl, c('High', 'Medium'))
+```
+
+
+```{r}
+tab <- formatC(St_test(dfTest$Rented.Bike.Count,dfTest$TempLvl), big.mark=" ") %>%
+  as.data.frame() %>% t()
+
+tab[,c(1,2)] <- tab[,c(1,2)] %>% as.integer() %>% 
+  formatC(big.mark=" ")
+
+colnames(tab)[3] <- 'p-value'
+rownames(tab) <- 'Test results'
+tab %>% kable_1(
+  titre='Does the daily number of rented bikes differ in temperatures ?')
+```
+
+As the p-value is higher than the 0.05 significance level, one may conclude there are no significant differences between the daily number of rented bikes depending on the 'Medium' and 'High' temperature levels. 
+
+In other words there is a similar pattern between the points located on both sides of the temperature which maximizes the number of rented bikes. 
+
+Nevertheless the p-value being quite low, if $\alpha$ > 0.09 we shall reject the null hypothesis of equal means. In other words we couldn't accept the hypothesis of equal means if we lowered the test's level of confidence.
+
+
+#### The relationship between bike rental and the solar radiation level
+
+
+There is a growing linear relationship between the rented bikes per day and the average level of solar radiation. 
+
+
+```{r}
+p <- ggplot(data = Daily_RentedBike, aes(x=Sol_Rad_avg,
+                                         y=Rented.Bike.Count)) +
+  geom_point(size=0.5, color='#848484') +
+  geom_smooth(method='lm', size=0.5) + 
+  labs(title = 'Number of rented bikes depending on solar radiation',
+  x = 'Average level of solar radiation', 
+  y = 'Rented bikes per day') + 
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+p <- ggplotly(p)
+p
+```
+
+
+
+Proceeding a linear regression on these two variables, we find that an increase of 0.1 MJ.m² in the level of solar radiation leads to an increase of about 2300 rented bikes per day. This result has to be nuanced since the average level of solar radiation is close to 0 and it is a variable which fluctuates little.
+
+
+```{r}
+mylm <- lm(Rented.Bike.Count~Sol_Rad_avg, data=Daily_RentedBike)
+```
+
+```{r}
+dust(mylm) %>%
+  sprinkle(col=2:4, round=3) %>%
+  sprinkle(col=5, fn=quote(pvalString(value))) %>%
+  sprinkle_colnames(term='Term',
+                    estimate='Estimate',
+                    std.error='Sd',
+                    statistic='T-statistic',
+                    p.value='p-value') %>% 
+  kable_1(titre='Linear regression of the daily rented bike count on the average solar radiation')
+```
+
+
+#### The wind speed's influence on the number of rented bikes
+
+
+```{r}
+Q2 <- quantile(Daily_RentedBike$Wind_Speed_avg, probs=seq(0,1,0.25))[3]
+```
+
+Although R plots an inverted U-shaped relationship between the daily rented bike count and the average wind speed, the point cloud is scattered.
+
+A decreasing relationship can be noticed when the wind speed starts to be felt.
+
+```{r}
+p <- ggplot(data = Daily_RentedBike, aes(x=Wind_Speed_avg,
+                                         y=Rented.Bike.Count)) +
+  geom_point(size=0.5, color="#848484") +
+  geom_smooth(size=0.5) +
+  labs(title = 'Number of rented bikes depending on wind speed', x = 'Average wind speed in km.h',
+       y = 'Rented bikes per day') + 
+  theme(plot.title = element_text(size = 10, face = "bold")) +
+  geom_vline(
+    xintercept=Q2,
+    color='#F78181',
+    size=0.5, linetype='dashed') +
+  annotate(geom="text", x=6.3, y=37000, label="Q2",
+              color="#F78181")
+
+p <- ggplotly(p)
+p
+```
+
+A t-test to check whether the number of rented bikes is more important when the average wind speed is low - i.e. lower than the average wind speed's median - we conducted a t-test.
+
+
+```{r}
+Daily_RentedBike$Wind_speed_Lvl <- as.factor(
+  ifelse(Daily_RentedBike$Wind_Speed_avg<Q2,
+         "Low","High")
+  )
+
+Daily_RentedBike$Wind_speed_Lvl <- factor(Daily_RentedBike$Wind_speed_Lvl, c("Low", "High"))
+```
+
+```{r}
+tab <- St_test(Daily_RentedBike$Rented.Bike.Count,Daily_RentedBike$Wind_speed_Lvl) %>%
+  as.data.frame() %>% t()
+
+tab[,c(1,2)] <- tab[,c(1,2)] %>% as.integer() %>% 
+  formatC(big.mark=" ")
+
+colnames(tab)[3] <- 'p-value'
+rownames(tab) <- 'Test results'
+tab %>% kable_1(
+  titre='Does the wind speed have an impact on bike rental ?')
+```
+
+As the test p-value is lower than the significance level $\alpha$ = 5%, the 'greater' alternative hypothesis can be accepted. In other words, people rent more bikes when there is little wind. 
+
+
+# Conclusion
+
+
+Coming back to the questions we asked at the beginning of our analysis, there is no doubt the Seoul share bike service is a success as shown by the t-test on the two samples 'Dec17' and 'Nov18'.
+
+We also asked ourselves what was the other variables' influence on the number of rented bikes. 
+
+After having split our case study into two parts, we have found the rented bike count depends both on time-related variables and meteorological variables. 
+
+As regards the temporal ones, the more important use of the service during daytime and no-holiday period indicates the Seoul bike sharing service is work-oriented. 
+
+There are also more rented bikes during sunny months, especially in June, to such a point that the Summer season stands out from the others. Indeed the part on meteorological variables emphasizes an increasing relationship between the number of rented bikes and both the temperatures and the solar radiation level.
+
+
+The coming part will aim at grouping variables which have similarities in order to avoid overfitting in the models we will estimate. We will also make classification of days based on their features. To this end we shall apply PCA and CA techniques on the 'Seoul Bike' data. 
+
