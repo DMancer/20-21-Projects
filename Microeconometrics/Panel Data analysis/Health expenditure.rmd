@@ -1,0 +1,535 @@
+---
+title: "Microéconométrie"
+author: "LEFAFTA Rémi, MANCER Djawed"
+header-includes: \usepackage{float}
+output:
+  pdf_document:
+    toc: yes
+    number_section: yes
+    keep_tex: yes
+    dev: tikz
+    df_print: kable
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=T, echo=F}
+knitr::opts_chunk$set(dev='pdf', echo = FALSE, comment="", message=FALSE,
+                      warning=FALSE, results="asis" , xtable.comment = FALSE,
+                      sanitize=TRUE,tidy.opts=list(width.cutoff=40),tidy=TRUE,
+                      table.placement = "H")
+```
+
+```{r}
+library(foreign)
+library(stargazer)
+library(tidyverse)
+library(ggplot2)
+library(e1071)
+library(magrittr)
+library(haven)
+library(GGally)
+library(VGAM)
+library(AER)
+library(plm)
+library(data.table)
+library(xtable)
+library(kableExtra)
+library(gplots)
+library(ggjoy)
+library(gridExtra)
+library(ggcorrplot)
+library(ggpubr)
+library(FactoMineR)
+library(factoextra)
+library(knitr)
+library(webshot)
+require(dplyr)
+library(magrittr)
+library(reporttools)
+```
+
+```{r}
+if (knitr::is_latex_output()) {
+  mykable <- function(tab, transp = FALSE, digits =2, titre=NULL, font_size = NULL,...){
+      if( transp ){
+        if(ncol(tab)<=6){
+          tab %>% t() %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position"),
+                           font_size =  font_size)
+        } else {
+          tab %>% t() %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position","scale_down"),
+                           font_size =  font_size)
+        }
+        
+      } else {
+        if(ncol(tab)<=6){
+          tab %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position"),
+                           font_size =  font_size)
+        } else {
+          tab %>% kable(caption=titre, digits = digits, booktabs=TRUE,...) %>%
+            kable_styling(full_width = F, position = "center", 
+                           latex_options = c("striped", "condensed", "HOLD_position","scale_down"),
+                           font_size =  font_size)
+        }
+      }
+    }
+  } else {
+  mykable <- function(tab, transp = FALSE, digits = 2, titre=NULL, font_size = NULL, ...){
+      if(transp){
+        tab %>% t() %>% kable(caption=titre, digits = digits,...) %>%
+          kable_styling(full_width = F, position = "center",
+                        bootstrap_options = c("striped", "condensed"))  
+      } else {
+        tab %>% kable(caption=titre, digits = digits, ...) %>%
+          kable_styling(full_width = F, position = "center",
+                        bootstrap_options = c("striped", "condensed"))
+      }
+    }
+  }
+```
+
+```{r}
+if (knitr::is_latex_output()) {
+  df.aff <- function(df, nrow = 10, var = 1:5, titre = NULL){
+    n <- min(nrow, nrow(df))
+    df %>% select(var) %>% head(n) %>% kable_plus(titre = titre)
+    }
+  } else {
+  df.aff<-function(df, nrow = 10, var = 1:5, titre=NULL){
+    df
+    }
+  }
+```
+
+
+```{r}
+custom_glimpse <- function(df) {
+  data.frame(
+    col_name = colnames(df),
+    col_index = 1:ncol(df),
+    col_class = sapply(df, class),
+    row.names = NULL
+  )
+}
+```
+
+```{r}
+data<- read_dta("SANTE.dta")
+```
+
+
+
+# Introduction
+
+## Structure des données
+
+
+
+```{r, include = FALSE}
+str(data)
+summary(data)
+```
+Nous avons dans la base données 6 variables :
+
+* `ID` : Identifiant de l'individu avec $i \in [1,200]$.
+* `ANNEE` : Année avec $t \in [1,5]$.
+* `DEPSANTE` : Dépenses en santé annuelles en centaines de dollars.
+* `REV` : Revenu en milliers de dollars.
+* `AGE` : Age en années.
+* `ASSU` $$=\left\{
+    \begin{array}{ll}
+       1 & \mbox{si l'individu a une assurance maladie privée au cours de l'année t} \\
+        0 & \mbox{sinon.}
+    \end{array}
+     \right.$$ 
+
+
+```{r}
+custom_glimpse(data) %>% 
+  mykable(transp=F, titre="Structure des données de notre panel")
+```
+
+
+
+Nous décidons de transformer la variable `ASSU` en facteur car elle n'a que deux valeurs possibles : 0 ou 1.
+On transforme notre variable $REV_{it}$ en logarithme.
+```{r}
+data$lrev<-log(data$REV)
+```
+Et on crée la variable $AGE^2_{it}$.
+```{r}
+data$agesq<-(data$AGE)^2
+```
+
+
+```{r}
+data$ASSU <- as.factor(data$ASSU)
+```
+
+
+```{r, include = F}
+sum(is.na(data))
+sum(duplicated(data))
+```
+
+Après vérification, il n'y a aucune donnée manquante.
+
+
+## Sommaire
+
+      
+
+
+
+```{r, include = F, echo=T}
+cor_data <- data[,c(3:5,7:8)]
+```
+
+```{r}
+cor_data <- as.data.frame(cor_data)
+```
+
+
+```{r}
+tableContinuous(cor_data)
+
+```
+
+
+
+
+On remarque que notre panel est très dispersé. En effet, l'étendue de l'âge et surtout celle du revenu est élevée. On note même qu'il y a certains individus qui n'ont rien dépensé en termes de santé dans une année. 
+
+
+
+
+
+## Vérification si panel cylindré ou non
+
+```{r}
+panel <- data[complete.cases(data),]
+plm::pdim(panel)
+```
+On conclue que le panel est bel et bien cylindré, on peut donc commencer à l'étudier.
+
+
+
+
+```{r }
+plotmeans(DEPSANTE ~ ANNEE, main="Evolution des dépenses de santé", data=data)
+```
+## Matrice des corrélations
+
+
+```{r }
+p <- ggcorrplot(cor(cor_data), hc.order = FALSE, type = "lower",
+outline.col = "white",
+colors = c("#6D9EC1", "white", "#E46726"),
+lab = TRUE, show.diag=FALSE,
+legend.title = "r-value") +
+  ggtitle("Correlation matrix") +
+  theme(plot.title = element_text(size = 15))
+
+ggarrange(p, ncol=1, nrow=1) + theme_bw()
+```
+
+
+De la matrice des corrélations, on remarque que toutes les variables exercent un impact positif sur les dépenses de santé. La variable la plus corrélée aux dépenses de santé la plus forte est l'âge au carré (et de fait l'âge également). On note cependant que le revenu et les dépenses de santé ont une corrélation assez proche de 0.
+
+
+
+# Question 1
+
+Lorsque l'on a une variable explicative en logarithme, on peut directement étudier le changement en unité de dépense de santé suite à une variation en pourcentage du revenu. Démontrons cela :
+Notre modèle s'écrit de la manière suivante :
+$$DEPSANTE_{it}=\beta_{1i}+\beta_2ln(REV_{it})+\beta_3AGE_{it}+\beta_4AGE^2_{it}+\beta_5ASSU_{it}+\epsilon_{it} \quad \forall \quad i \in [1,200], \;t \in[1,5]$$
+Si l'on dérive $DEPSANTE_{it}$ par rapport à $REV_{it}$ on obtient :
+
+$\frac{\partial DEPSANTE_{it}}{\partial REV_{it}} = \frac{\beta_2}{REV_{it}} \leftrightarrow \beta_2 = \frac{\partial DEPSANTE{it}}{\frac{\partial REV_{it}}{REV_{it}}}$
+On finit par diviser par 100 et l'on obtient enfin : $\frac{\beta_2}{100}= \frac{\partial DEPSANTE_{it}}{\% \Delta REV_{it}}$
+
+
+# Question 2
+
+On sait que l'âge n'exerce pas forcément un impact linéaire sur la variable à expliquer.
+Si l'on calcule $$\frac{\partial DEPSANTE_{it}}{\partial AGE_it} = \beta_3 + 2\beta_4AGE_{it}$$
+On voit que l'effet marginal de l'âge sur les dépenses de santé est linéaire, ce qui signifie que l'effet de l'âge sur les dépenses de santé est non linéaire.
+Cela montre que l'âge permet d'avoir un impact non linéaire sur les dépenses de santé. En effet, si par exemple $\beta_3$ est positif et $\beta_4$ négatif, on comprend que l'âge exerce un effet positif sur les dépenses de santé mais que l'effet positif s'estompera et sera de moins en moins fort au fur et à mesure que l'âge croît.
+Pour déterminer quand est-ce que l'impact de l'âge devient non linéaire, il suffit d'égaliser la précédente équation à $0$.
+
+```{r}
+ggplot(data, aes(x = AGE, y = DEPSANTE)) + 
+  geom_smooth(colour = "green") +
+  geom_point(colour = "red")
+```
+
+On voit visuellement, que il y une relation non-linéaire entre la variable `AGE` et `DEPSANTE`.
+
+# Question 3
+
+
+## MCO 
+
+
+$$DEPSANTE_{it}=\beta_{1}+\beta_2ln(REV_{it})+\beta_3AGE_{it}+\beta_4AGE^2_{it}+\beta_5ASSU_{it}+\epsilon_{it}$$  \\ $$\forall i \in [1,200], \;t \in[1,5]$$
+
+```{r}
+pooled=lm(DEPSANTE~lrev+AGE+agesq+ASSU, data=data)
+stargazer(pooled, title="Estimation du modèle pooled", type="latex", table.placement="H")
+```
+
+
+Pour le modèle estimé par la méthode des MCO, nous avons un $R^{2}$ de $0.55$. 
+Tous nos coefficients sont significatif à 1% sauf celui associé $(\beta_{2})$ à `lrev` qui est significatif à seulement 10%. 
+Par exemple, une personne ayant une assurance privé, paye en moyenne 151.7$ de plus qu'une personne non assurée. 
+
+## Modèle à effets fixes
+
+On utilise un modèle à effets fixes lorsque l'on cherche à analyser l'impact des variables qui changent au cours du temps.
+Dans un modèle à effets fixes individuels, on considère que les paramètres $\beta_k$ avec $k = 1,2,3,4$ sont homogènes pour tous les individus $i \in [1,200]$ et où l'hétérogéneité se voit modélisée grâce à une constante individuelle. On a ainsi, pour l'individu $i$, le modèle suivant :
+$$DEPSANTE_{it}= \beta_i + x'_{it}\beta+ \epsilon_{it}$$.
+
+On réécrit le modèle comme suit :
+$$DEPSANTE_{it}=\beta_{1i}+\beta_2ln(REV_{it})+\beta_3AGE_{it}+\beta_4AGE^2_{it}+\beta_5ASSU_{it}+\epsilon_{it}$$  \\ $$\forall i \in [1,200], \;t \in[1,5]$$
+
+### Within
+
+L'estimation Within est une estimation où les observations sont centrées sur la moyenne individuelle. Lorsque les observations sont centrées, on estime par la méthode des MCO.
+$$DEPSANTE_{it}-\overline{DEPSANTE_i}= (\beta_{1i}-\overline{\beta_i})+ \beta_2(ln(REV_{it})-ln(\overline{REV_i}))+\beta_3(AGE_{it}-\overline{AGE_i})+\beta_4(AGE^2_{it}-\overline{AGE^2_i})+\beta_5(ASSU_{it}-\overline{ASSU_i})+\epsilon_{it} -\epsilon_i $$  \\ $$\forall i \in [1,200], \;t \in[1,5]$$
+
+```{r}
+within<-plm(DEPSANTE~lrev+AGE+agesq+ASSU,
+data=data, model="within")
+stargazer(within, title="Estimation du modele within",
+type="latex", table.placement="H")
+
+```
+
+```{r}
+#effets fixes moyens : indivM <- mean(fixef(within)) 
+```
+
+Le coefficient associé à chaque variable indicatrice correspond à l'estimation de la constante pour l'indivu $i$.
+Le coefficient estimé de la variable `lrev` indique que si le revenu augmente de 1% alors les dépenses de santé diminue de $10.5\$$ 
+Pour l'interprétation du coefficient associé à la variable `age` il faut prendre en compte aussi la variable `agesq`. Les deux s'interprétent ensemble, en effet $\frac{\partial DEPSANTE}{\partial AGE} = 0.065 + 2*0.0003AGE_{it}$.
+Si l'individu $i$ a une assurance alors il dépense en moyenne $135\$$ en plus que une personne non assuré.
+Avec la méthode Within nous avons un $R^{2} = 0.16$, seul le coefficient associé à la variable `ASSU` est significatif à 1%. 
+
+
+
+
+
+## Modèle à effets aléatoires par MCQG
+
+Le modèle qu'on estime est : 
+
+$$DEPSANTE_{it}=\beta_{1}+\beta_2ln(REV_{it})+\beta_3AGE_{it}+\beta_4AGE^2_{it}+\beta_5ASSU_{it}+\epsilon_{it} + \mu_{i} \quad \forall  i \in [1,200], \;t \in[1,5]$$
+Ce modèle est à erreurs composées, c'est à dire que que nous avons deux termes d'erreurs $\epsilon_{it}$ qui est identique à celui des MCO. Mais aussi le terme d'erreur  $\mu_{i}$ qui est une variable aléatoire. $\epsilon_{it}$ correspond à la variance intra-individuelle alors que $\mu_i$ correspond lui à la variance inter.
+Le modèle à effets aléatoires a un avantage sur le modèle à effets fixes : celui de pouvoir intégrer les variables invariantes au cours du temps.
+Ce modèle a également l'incorporation du terme $\theta$. Ce terme se calcule comme suit :
+$$\theta = 1 - \sqrt{\frac{\sigma_{\varepsilon}^{2}}{\sigma_{\varepsilon}^{2}+T \sigma_{\beta_1}^{2}}}$$
+Comment l'interpéter ? Le terme qui est mis en racine carrée n'est ni plus ni moins que la part des variations intra-individuelles parmi les variations totales. Autrement dit,  $\approx 27\%$ de la moyenne individuelle est retirée de chaque variable pour l'estimation par MCQG.
+Ainsi, $\widehat{\theta}$ valant $\approx 73\%$, on en conclue que l'on se rapproche davantage d'un modèle à effets individuels que d'un modèle pooled.
+
+```{r}
+random=plm(DEPSANTE~lrev+AGE+agesq+ASSU,
+data=data, model="random", method="walhus") 
+stargazer(random, title="Estimation du modèle à effets aléatoires", type="latex", table.placement="H")
+```
+
+
+Les coefficients associés aux variabless `ASSU` et `agesq` sont significatifs à $1\%$. 
+
+
+
+# Question 4
+Afin de répondre à cette question, on se sert de la 3ème procédure de test d'Hsiao.
+Les hypothèses de test sont :
+
+$$H_{0}^{1} : \alpha_{i}=\alpha \quad \forall i \in [1, N]$$
+$$H_{1}^{1} : \exists ~ (i,j) \in [1,N] ~ / ~ \alpha_{i} \neq \alpha_{j}$$
+
+On suppose que les $\beta_{i}$ sont homogènes. On des contraintes uniquement sur les constantes.
+
+La statistique de test de Fisher s'écrit : $$F = \frac{SCR_{pooled} - SCR_{W}/ [N-1]}{SCR_{W}/[N(T-1)-K]} \sim F [(N-1), N((T-1)-K]$$ 
+
+Si F est supérieur au seuil théorique de la distribution de Fisher avec $F(199,796)$ et 5% de risque, on rejette $H_{0}^{1}$ alors les constantes sont individuelles. Si on conserve $H_{0}^{1}$ alors on a une constante commune à tous nos individus.
+
+On a $N-1 = 199$ contraintes et $N(T-1)-K = 796$ degrès de liberté. 
+
+On récupère les sommes des carrées des résidus du modèle pooled et within.
+
+```{r}
+SCRpooled <- deviance(pooled)
+SCRwithin <- deviance(within)
+```
+
+
+```{r, include = F}
+((SCRpooled - SCRwithin)/SCRwithin)*(796/199)
+```
+
+$$F = \frac{3630.26 - 845.43}{845.43}\frac{796}{199} = 13.18 > F^{0.05}(199,796) = 1.19 $$ 
+
+On rejette $H_{0}^{1}$, on a donc des constantes individuelles.
+
+# Question 5
+
+```{r}
+stargazer(pooled, within, random, type = "latex")
+```
+
+
+Le seul modèle où le revenu a un effet positif est le modèle pooled. De plus, seulement pour le modèle pooled le coefficient associé à la variable `lrev` est significatif à $10%$ et entraine une augmentation des dépenses de $0.39\$$.
+En revanche les modèles Within et Random, indiquent que les dépenses diminuent respectivement de $0.11\$$ et $0.15\$$. La prise en compte des effets individuels engendrent un effet marginal négatif du revenu.
+
+
+### Compléments microéconomiques sur l'effet du revenu sur les dépénses de santé de chaque individu
+```{r}
+data$ID <- as.factor(data$ID)
+ggplot(data, aes(x = lrev, y = DEPSANTE, colour = ID)) +
+  geom_smooth(method = "lm", se = F) +
+  geom_smooth(method = "lm", se = F, color = "black") +
+  labs(title = "Revenu et dépense en santé", x = "Logarithme du revenu",   y = "Dépense en centaine d'euros")+
+  theme_minimal()+
+  theme(legend.position = "none")
+```
+
+Grâce à cette représentation graphique, on peut voir que certains individus considèrent les dépenses de santé comme un bien inférieur. En effet, lorsque leur revenu augmente il baisse leur dépense de santé. A l'inverse, d'autres individus, considèrent la santé comme un bien normal, plus leur revenu est élevé plus ils dépensent en santé.
+
+
+# Question 6
+
+Afin de déterminer le bon choix de modèle entre un à effets fixes et un à effets aléatoires, on performe un test d'Hausman dans lequel l'hypothèse nulle correspond à un modèle à effets aléatoires.
+
+
+```{r}
+stargazer(within, random, type = "latex")
+```
+
+
+Pour le modèle Within, le seul coefficient significatif est celui associé à la variable `ASSU`. A l'inverse, pour le modèle random, tous les coefficients sont significatifs sauf $\beta_{2}$ associé à la variable `lrev`. De plus, on remarque que l'effet marginal exercé par l'âge est opposé, l'un étant positif (Within) et l'autre négatif (random). 
+Le coefficient associé à la variable `agesq` est positif, au fur et à mesure qu'un individu vieillit, il dépense de plus en plus en santé. Un $R^{2}$ de 30%  pour le modèle random est très bon pour des données microéconométrique. On ne peut comparer cependant les deux $R^{2}$ car nous ne disposons pas des mêmes classes de modèle ni d'estimateur.
+
+$$\begin{cases}
+ H_0 :     & \mathbb{E}[\beta_{1i} | X_{i}] = 0\\
+H_1 :    & \mathbb{E}[\beta_{1i} | X_{i}] \neq 0.
+\end{cases}$$
+
+Si l'on conserve $H_{0}$ alors on préfère garder le modèle à effet aléatoire et donc l'estimateur des $\widehat{\beta_{MCQG}}$ qui d'après les hypothèses de Gauss-Markov est BLUE. Sous $H_{1}$, le modèle à effets fixes individuelles est préferé car l'estimateur $\widehat{\beta_{W}}$ est non biaisé.
+
+
+La statistque de test : 
+
+$$H= (\widehat{\beta}_{MCQG}-\widehat{\beta}_{LSDV})' [Var(\widehat{\beta}_{MCQG}-\widehat{\beta}_{LSDV})]^{-1}-(\widehat{\beta}_{MCQG}-\widehat{\beta}_{LSDV}) \sim  \chi^2(K)$$
+
+Si la statistique de test est supérieure à la valeur critique du $\chi^2_{0.95}$ alors on rejette $H_{0}$.
+```{r, include=F}
+phtest(within, random)
+```
+
+La réalisation de la statistique de test nous donne $H = 16.608$.
+
+```{r, include=F}
+qchisq(0.95, df = 4)
+```
+
+On a de plus $H^{0.05}(4) = 9.49$
+
+On a donc $H > H^{0.05}(4)$ ce qui implique le rejet de $H_{0}$, on préfère conserver le modèle à effet individuels fixes.
+
+
+
+# Question 7
+
+## L’effet marginal de l’âge sur les dépenses de santé est :
+
+
+$$\frac{\partial DEPSANTE_{it}}{\partial AGE_{it}} = -0.09 + 2*0.002AGE_{it}$$
+La dérivée seconde est : 
+
+$$\frac{\partial^2 DEPSANTE_{it}}{\partial AGE_{it}^{2}} = 0.004 > 0$$
+Cela confirme ce qu'on a dit précédemment, les dépenses de santé augmentent plus on prend de l'âge. 
+
+
+
+
+
+## L'effet de l'assurance sur les dépenses de santé :
+
+
+
+Sachant que le coefficient associé à l'assurancce est positif, ceux qui ont une assurance de santé dépensent plus en santé. 
+
+
+```{r}
+g1 <- ggplot(data, aes(x = lrev, y = DEPSANTE, colour = ASSU)) +
+      geom_smooth(method = "lm", se = F) +
+      geom_point(shape=16, alpha=0.8) + 
+      labs(title = "Revenu et dépense en santé", 
+           x = "Logarithme du revenu",   y = "Dépense en centaine d'euros")+
+      theme_minimal()+ 
+      scale_color_brewer(palette = "Dark2") +
+      theme(legend.position = "top") +
+      scale_fill_discrete( 
+                      breaks=c("0","1"), 
+                      labels=c("Non assuré", "Assuré"))
+
+ 
+
+  
+
+ 
+
+g2 <- ggplot(data, aes(x = ASSU, y = DEPSANTE, fill = ASSU)) +
+      geom_boxplot() +
+      theme_minimal()+ 
+      scale_fill_brewer(palette="Dark2") +
+      theme(legend.position = "none") +
+      labs(title = "Distribution selon l'assurance", 
+           x = "",   y = "Dépense en centaine d'euros") +
+      scale_x_discrete(breaks=c("0","1"),
+        labels=c("Non assuré", "Assuré"))
+ 
+
+ 
+
+ggarrange(g1,g2)
+```
+
+```{r}
+plot(DEPSANTE ~ ASSU, data = data)
+```
+
+On voit graphiquement très bien le résultat énoncé. 
+Donc ceux qui ont une assurance santé dépensent en moyenne 136$ de plus que ceux qui ne sont pas assurés. 
+Donc, sur le premier graphique, on observe que deux individus ayant des revenus faibles, ont un grand écart en terme de dépense de santé en fonction de s'ils sont assurés ou non. Cet écart s'estompe lorsque les revenus augmentent.
+Sur le second graphique, on voit que l'écart inter-quartile est plus grand pour les non assurés que les assurés. La médiane des assurés est plus élévés que le troisième quartile des non assurés. A noter cependant que l'individu qui dépense le plus en santé est non assuré. 
+
+
+
+# Question 8
+
+Le modèle Within consistant à soustraire à chaque variable sa moyenne, si l'on a : $ASSU_{it} = 0 \; ou  \; 1 \; \forall t \in [1;5]$ alors on aura :
+$$ASSU_{it}-\overline{ASSU_{it}} = ASSU_{it}-ASSU_i=0$$. D'où la disparition de la variable  ÀSSU`de notre estimation.
+
+Si ASSU est invariant alors il n'y a pas de variabilité intra dans la  variable `ASSU` pour chaque individu et donc les valeurs de la  variable `ASSU` transformée Within seront toujours égales à 0. On en revient à un modèle avec pour variables explicatives : `age`, `age^2` et `ln(rev)`. 
+En outre, on sait qu'un modèle à effets fixes n'est pas du tout efficace pour des données dont la variance intra des individus au fil du temps est faible. Il souffre également en terme d'efficacité si les variables évoluent très peu au cours du temps. Ainsi, si ASSU est invariant, alors le modèle Within est inefficace pour estimer l'impact de l'assurance maladie privée sur les dépenses de santé. En effet, les variables invaraiantes sont parfaitement colinéaires avec l'individu. Enfin, le modèle à effets fixes est étudié afin d'étudier les causes de changement d'un individu.
+```{r}
+within2<-plm(DEPSANTE~lrev+AGE+agesq,
+data=data, model="within")
+stargazer(within2, title="Estimation du modèle within avec Assurance invariante",
+type="latex", table.placement="H")
+```
+
+
+On remarque que aucun des coefficients n'est significatif. 
+
+
