@@ -1,13 +1,8 @@
-import streamlit as st
 from prettytable import PrettyTable
-st.title('Simulator')
-streamlit run streamlit_app.py
 
-# Définition des valeurs possibles pour les colonnes "Build vs Target" et "Buildpace"
 build_vs_target_values = ["Very Strong", "Strong", "On track", "Soft", "Very Soft"]
 buildpace_values = ["quick", "slow"]
 
-# Définition des stratégies de prix
 strategies = {
     ("Very Strong", "quick"): 1.01,
     ("Very Strong", "slow"): 0.98,
@@ -21,7 +16,6 @@ strategies = {
     ("Very Soft", "slow"): 0.9,
 }
 
-# Fonction de calcul du prix final pour une combinaison donnée
 def calculate_final_price(prices, build_vs_target, buildpace):
     third_concurrent_price = min(prices)
 
@@ -46,9 +40,8 @@ def calculate_final_price(prices, build_vs_target, buildpace):
     elif build_vs_target == "Very Soft" and buildpace == "slow":
         return third_concurrent_price * strategies[("Very Soft", "slow")]
     else:
-        return third_concurrent_price  # Valeur par défaut si aucune condition n'est satisfaite
+        return third_concurrent_price
 
-# Fonction de calcul du tableau de nouveaux prix en fonction des prix des concurrents
 def calculate_final_prices(prices):
     table = PrettyTable()
     table.field_names = ["Build vs Target", "Buildpace", "New Price"]
@@ -60,7 +53,6 @@ def calculate_final_prices(prices):
 
     return table
 
-# Demander à l'utilisateur d'entrer les prix des concurrents
 prices = []
 for i in range(3):
     while True:
@@ -74,6 +66,5 @@ for i in range(3):
         except ValueError:
             print("Veuillez entrer un nombre valide.")
 
-# Calculer et afficher les nouveaux prix
 result_table = calculate_final_prices(prices)
 print(result_table)
